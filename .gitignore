@@ -1,0 +1,7 @@
+node_modules/
+dist/
+design/
+*.backup.json
+career-route-*.json
+.env*
+!package.json

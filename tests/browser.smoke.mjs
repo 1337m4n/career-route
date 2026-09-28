@@ -1,0 +1,118 @@
+import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
+import { readFile,mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { decodeBackup } from '../crypto.mjs';
+
+const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const allowed = new Set(['index.html','styles.css','app.js','data.mjs','rules.mjs','crypto.mjs','reminders.mjs','favicon.svg']);
+const prefix=process.env.CAREER_ROUTE_PREFIX || '';
+const server = createServer(async (req,res)=> {
+  if (prefix && req.url===prefix) {res.writeHead(301,{Location:prefix+'/'});res.end();return;}
+  const file = req.url === prefix+'/' ? 'index.html':req.url.startsWith(prefix+'/') ? req.url.slice(prefix.length+1):'';
+  if (!allowed.has(file)) {res.writeHead(404);res.end();return;}
+  try {
+    const content=await readFile(new URL('../'+file,import.meta.url));
+    res.setHeader('Content-Type',file.endsWith('.css') ? 'text/css':file.endsWith('.html') ? 'text/html; charset=utf-8':file.endsWith('.svg') ? 'image/svg+xml':'text/javascript');
+    res.end(content);
+  } catch {res.writeHead(500);res.end();}
+});
+await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+const url=process.env.CAREER_ROUTE_URL || 'http://127.0.0.1:'+server.address().port+prefix+'/';
+const evidence=await mkdtemp(join(tmpdir(),'career-route-qa-'));
+let browser;
+try {
+  browser=await chromium.launch({headless:true,channel:process.env.PLAYWRIGHT_CHANNEL || undefined});
+  const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[],external=[];
+  page.on('pageerror',error=>errors.push(error.message));
+  page.on('console',message=>{if (message.type()==='error') errors.push(message.text());});
+  page.on('request',request=>{if (!request.url().startsWith(url)) external.push(request.url());});
+  const navigate=async view=>page.locator('.nav-item[data-view="'+view+'"]').click();
+  const tab=async type=>page.locator('.tabs [data-tab="'+type+'"]').click();
+  const fill=async (form,name,value)=>page.locator('#'+form+' [name="'+name+'"]').fill(String(value));
+  const select=async (form,name,value)=>page.locator('#'+form+' [name="'+name+'"]').selectOption(value);
+  const submit=async form=>page.locator('#'+form+' button[type="submit"]').click();
+  const stored=()=>page.evaluate(()=>JSON.parse(localStorage.getItem('career-route:v1')));
+  const today=new Date().toISOString().slice(0,10),future=n=>new Date(Date.parse(today)+n*86400000).toISOString().slice(0,10);
+  await page.goto(url);
+  await page.getByRole('heading',{name:'今天的判断'}).waitFor();
+  assert.equal(await page.title(),'今日判断 · 路线校准');
+  assert.ok((await page.locator('#app').innerText()).includes('五问校准'));
+  await navigate('feedback');await tab('baseline');
+  for (const [key,value] of Object.entries({debtBalance:90000,cashBalance:25000,monthlyNetIncome:10000,monthlyDebtPayment:5000,monthlyLivingCost:4000,targetRoles:'安全工程',contractNoticeDays:30})) await fill('baseline-form',key,value);
+  for (const key of ['technologyDepth','responsibility','transferability','targetFit','outcomes']) await select('baseline-form','career_'+key,'true');
+  await submit('baseline-form');await page.getByRole('heading',{name:'今天的判断'}).waitFor();
+  assert.equal((await stored()).schemaVersion,2);
+  const before=await stored();await navigate('feedback');await tab('light');await page.getByRole('button',{name:'无重要变化',exact:true}).click();
+  const after=await stored();assert.deepEqual(before.baseline,after.baseline);assert.equal(after.checkIns.at(-1).noChange,true);assert.equal(after.checkIns.at(-1).searchActionAt,undefined);
+  await navigate('offers');
+  const malicious='QA 岗位 <img src=x onerror=alert(1)>';
+  for (const [key,value] of Object.entries({company:malicious,role:'安全工程师',monthlyNetIncome:14000,monthlyLivingCost:5000,startDate:future(60)})) await fill('offer-form',key,value);
+  for (const [key,value] of Object.entries({city:'广州',workMode:'onsite',status:'written'})) await select('offer-form',key,value);
+  for (const key of ['technologyDepth','responsibility','transferability','targetFit','outcomes']) await select('offer-form','career_'+key,'true');
+  assert.ok((await page.locator('[data-career-output]').innerText()).includes('5/5'));
+  await submit('offer-form');await page.locator('.offer-table tbody tr').nth(1).waitFor();
+  assert.equal(await page.locator('.offer-table img').count(),0);assert.equal((await stored()).offers.length,1);assert.equal((await stored()).offers[0].careerScore,5);
+  assert.ok((await page.locator('.offer-table [data-action="edit-offer"]').boundingBox()).height<=30);
+  await page.getByRole('heading',{name:'机会比较',exact:true}).scrollIntoViewIfNeeded();
+  await page.screenshot({path:join(evidence,'offers-desktop.png')});
+  const gd=(await stored()).offers[0];
+  await navigate('feedback');await tab('major');
+  await select('major-form','routeState','GUANGDONG_READY');await select('major-form','offerId',gd.id);
+  await fill('major-form','premises','广东书面机会符合长期安全工程方向\n新的必要现金流可以覆盖债务与生活');
+  await fill('major-form','nextMajorReviewAt',future(30));await submit('major-form');
+  await page.getByRole('heading',{name:'今天的判断'}).waitFor();assert.equal((await stored()).decisions.length,1);
+  await navigate('feedback');await tab('major');
+  for (const p of (await stored()).routeDecision.decisionPremises) await select('major-form','premise_'+p.id,'invalid');
+  await page.getByRole('button',{name:'只保存前提复查，暂不选新路线'}).click();
+  assert.equal((await stored()).routeState,'GUANGDONG_READY');assert.equal((await stored()).riskState,'YELLOW');
+  assert.ok((await stored()).decisions[0].decisionPremises.every(p=>p.status==='valid'));
+  await navigate('home');await page.screenshot({path:join(evidence,'home-desktop.png')});
+  await navigate('settings');const password='test-passphrase-123';
+  await fill('backup-form','password',password);await fill('backup-form','passwordConfirm',password);
+  const downloading=page.waitForEvent('download');await submit('backup-form');const downloaded=await downloading;
+  const backupPath=join(evidence,'synthetic-encrypted.json');await downloaded.saveAs(backupPath);
+  const encrypted=await readFile(backupPath,'utf8');assert.equal(JSON.parse(await decodeBackup(encrypted,password)).decisions.length,1);assert.ok(!encrypted.includes(malicious));
+  const preserved=await stored();await page.locator('#import-password').fill('wrong-password');await page.locator('#import-file').setInputFiles(backupPath);
+  await page.getByRole('status').filter({hasText:'口令错误或备份已损坏'}).waitFor();assert.deepEqual(await stored(),preserved);
+  await page.locator('#import-password').fill(password);page.once('dialog',dialog=>dialog.accept());await page.locator('#import-file').setInputFiles(backupPath);
+  await page.getByRole('status').filter({hasText:'备份导入成功'}).waitFor();assert.equal((await stored()).decisions.length,1);
+  await navigate('timeline');const calendarDownload=page.waitForEvent('download');await page.getByRole('button',{name:'下载日历提醒 .ics'}).click();
+  const calendarPath=join(evidence,'synthetic-reminders.ics');await (await calendarDownload).saveAs(calendarPath);
+  assert.ok((await readFile(calendarPath,'utf8')).includes('BEGIN:VALARM'));
+  await navigate('feedback');await tab('major');
+  for (const p of (await stored()).routeDecision.decisionPremises) await select('major-form','premise_'+p.id,'valid');
+  await select('major-form','routeState','HOLD_AND_SEARCH');await select('major-form','manualOverride','true');
+  await fill('major-form','premises','我选择先核实广东机会剩余关键条款\n保留当前收入直到切换成本得到确认');
+  await fill('major-form','overrideReason','需要核实剩余条件，不是无限期继续等');await fill('major-form','overrideReviewAt',future(7));
+  await submit('major-form');await page.getByRole('heading',{name:'今天的判断'}).waitFor();
+  assert.equal((await stored()).routeState,'HOLD_AND_SEARCH');assert.ok((await stored()).routeDecision.manualOverride);
+  await navigate('feedback');await tab('major');
+  for (const p of (await stored()).routeDecision.decisionPremises) await select('major-form','premise_'+p.id,'valid');
+  await select('major-form','overrideStillValid','false');await page.getByRole('button',{name:'只保存前提复查，暂不选新路线'}).click();
+  assert.equal((await stored()).riskState,'YELLOW');assert.equal((await stored()).decisions.at(-1).manualOverride.stillValid,undefined);
+  await navigate('offers');await page.locator('[data-action="edit-offer"][data-id="'+gd.id+'"]').click();
+  await select('offer-form','status','accepted');await submit('offer-form');
+  await navigate('feedback');await tab('resign');
+  for (const [key,value] of Object.entries({contractNoticeDays:30,availableHandoverDays:30,preferredHandoverDays:28,transitionIncomeGapMonths:0})) await fill('resign-form',key,value);
+  await select('resign-form','termsConfirmed','true');await select('resign-form','pendingConditionsClear','true');await submit('resign-form');
+  assert.equal((await stored()).riskState,'BLOCKED');assert.equal((await stored()).routeState,'HOLD_AND_SEARCH');
+  await page.locator('[data-action="withdraw-resign"]').click();
+  await page.reload();assert.equal((await stored()).routeState,'HOLD_AND_SEARCH');
+  await navigate('home');await page.setViewportSize({width:390,height:844});await page.screenshot({path:join(evidence,'home-mobile.png')});
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
+  assert.equal(external.length,0);assert.deepEqual(errors,[]);
+  const insecurePage=await browser.newPage();
+  await insecurePage.route('http://insecure.example/**',async route=>{
+    const pathname=new URL(route.request().url()).pathname,file=pathname===prefix+'/' ? 'index.html':pathname.slice(prefix.length+1);
+    if (!allowed.has(file)) return route.fulfill({status:404,body:''});
+    await route.fulfill({status:200,contentType:file.endsWith('.html') ? 'text/html; charset=utf-8':file.endsWith('.css') ? 'text/css':'text/javascript',body:await readFile(new URL('../'+file,import.meta.url))});
+  });
+  await insecurePage.goto('http://insecure.example'+prefix+'/');await insecurePage.getByRole('heading',{name:'需要安全连接'}).waitFor();
+  assert.equal(await insecurePage.locator('#app form').count(),0);assert.equal(await insecurePage.evaluate(()=>localStorage.getItem('career-route:v1')),null);
+  await insecurePage.close();
+  console.log(JSON.stringify({passed:true,url,flow:'baseline -> no-change -> derived Offer -> decision -> invalid premises + immutable archive -> encrypted export/import -> calendar -> manual override + recheck -> blocked resignation -> refresh -> mobile -> insecure-origin blocked',viewports:['1440x1000','390x844'],externalRequests:0,consoleErrors:0,evidence},null,2));
+} finally {
+  await browser?.close();await new Promise(resolve=>server.close(resolve));
+}
