@@ -90,6 +90,21 @@ function offerAssessment(o,data,kind) {
 }
 export const qualifyGuangdongOffer = (o,data)=>offerAssessment(o,data,'gd');
 export const qualifyShanghaiOffer = (o,data)=>offerAssessment(o,data,'sh');
+export function routeTendencies(data) {
+  if (!validateBaseline(data).valid) return [];
+  const current = financialCapacity(data);
+  const ranked = (data.offers ?? []).filter(o=>['verbal','written','accepted'].includes(o.status) && (o.city === '上海' || o.city === '广东其他' || (data.profile?.targetCities ?? []).includes(o.city))).map(o=>{
+    const shanghai = o.city === '上海', assessment = shanghai ? qualifyShanghaiOffer(o,data):qualifyGuangdongOffer(o,data);
+    const career = o.targetAligned === true && number(assessment.careerScore) ? Math.round(25*assessment.careerScore/5):0;
+    const finance = assessment.affordable ? 20:assessment.monthlyBalance !== null && assessment.monthlyBalance >= 0 ? 10:0;
+    const bridgePlan = isDate(o.startDate) && isDate(o.bridgeExitDate) && o.bridgeExitDate > o.startDate && o.bridgeExitDate <= addMonths(o.startDate,data.config?.bridgeMaxMonths ?? 6) && isDate(o.gdSearchRestartDate) && days(o.gdSearchRestartDate,o.bridgeExitDate) >= 60;
+    const plan = shanghai ? bridgePlan:((data.profile?.targetCities ?? []).includes(o.city) || o.city === '广东其他');
+    const score = (o.status === 'accepted' ? 20:o.status === 'written' ? 15:5)+career+finance+(plan ? 20:0)+(assessment.qualified ? 15:0);
+    const checked = [current.stress !== 'UNKNOWN' && validateBaseline(data).valid,['written','accepted'].includes(o.status),['confirmed','likely'].includes(o.certainty),deriveCareer(o.careerFacts).coverage === 5,assessment.monthlyBalance !== null,assessment.costsKnown && assessment.probationKnown,typeof data.partnerPlan?.sharedDestinationAligned === 'boolean'].filter(Boolean).length;
+    return {id:o.id,company:o.company,city:o.city,route:shanghai ? '上海桥接':'直接广东',score,qualified:assessment.qualified,reason:assessment.reasons[0]?.text ?? null,confidence:Math.round(checked/7*100),checked};
+  }).sort((a,b)=>b.score-a.score);
+  return [...new Map(ranked.map(item=>[item.route,item])).values()].slice(0,2);
+}
 export function resignBlockers(o,data,today) {
   const b = [];
   if (o?.status !== 'accepted') b.push(issue('R01','必须正式接受书面 Offer。'));

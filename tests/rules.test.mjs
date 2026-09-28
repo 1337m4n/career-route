@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluate,qualifyGuangdongOffer,qualifyShanghaiOffer,deriveCareer,deriveEnergy,resignBlockers,financialCapacity,bridgeRenewalErrors } from '../rules.mjs';
+import { evaluate,qualifyGuangdongOffer,qualifyShanghaiOffer,routeTendencies,deriveCareer,deriveEnergy,resignBlockers,financialCapacity,bridgeRenewalErrors } from '../rules.mjs';
 import { createInitialData,validateData,recordRouteDecision } from '../data.mjs';
 import { encryptBackup,decodeBackup } from '../crypto.mjs';
 import { makeCalendar } from '../reminders.mjs';
@@ -32,6 +32,23 @@ test('上海低于 3 万但职业升级可桥接；高收入不要求机械 +1',
 test('两地均符合时由用户选，不自动广东优先',()=>{
   const d=fixture();d.offers=[offer(),offer('上海')];
   assert.equal(evaluate(d,'2026-12-01').suggestedRoute,'ROUTE_CHOICE_REQUIRED');
+});
+test('五问路线倾向只基于已录入机会；百分比和证据置信度分开',()=>{
+  const blank=createInitialData();blank.offers=[offer()];assert.deepEqual(routeTendencies(blank),[]);
+  const d=fixture();assert.deepEqual(routeTendencies(d),[]);
+  const careerFacts=Object.fromEntries(['technologyDepth','responsibility','transferability','targetFit','outcomes'].map(key=>[key,true]));
+  const gd={...offer(),certainty:'confirmed',careerFacts},sh={...offer('上海'),certainty:'confirmed',careerFacts};
+  d.partnerPlan.sharedDestinationAligned=true;d.offers=[gd];
+  const [first]=routeTendencies(d);
+  assert.equal(first.route,'直接广东');assert.equal(first.score,95);assert.equal(first.confidence,100);assert.equal(first.checked,7);assert.equal(first.qualified,true);
+  d.offers.push(sh);
+  const both=routeTendencies(d);assert.deepEqual(both.map(x=>x.route),['直接广东','上海桥接']);
+  assert.ok(both.every(x=>x.score>=0 && x.score<=100 && x.confidence===100));
+  gd.status='verbal';
+  const partial=routeTendencies(d).find(x=>x.route==='直接广东');
+  assert.equal(partial.qualified,false);assert.ok(partial.score<first.score);assert.ok(partial.confidence<first.confidence);
+  d.offers=[{...offer('北京'),careerFacts}];
+  assert.deepEqual(routeTendencies(d),[]);
 });
 test('风险与已选路线独立；桥接到期强制复盘不自动离职',()=>{
   const d=fixture();d.routeState='SHANGHAI_BRIDGE_ACTIVE';d.routeDecision.bridgeExitDate='2027-06-01';
