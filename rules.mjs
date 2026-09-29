@@ -31,7 +31,7 @@ export function deriveEnergy(f = {}) {
 export function bridgeRenewalErrors(v,today) {
   const errors=[];
   if (!['project','income','market','other'].includes(v.renewalEvidenceType) || !['confirmed','likely'].includes(v.evidenceCertainty) || typeof v.newEvidence !== 'string' || v.newEvidence.trim().length < 12) errors.push('需新的项目、收入、市场或重要事实证据；旧习惯、奖金不能单独续期。');
-  if (!isDate(v.bridgeExitDate) || v.bridgeExitDate <= today || v.bridgeExitDate > addMonths(today,6) || !isDate(v.gdSearchRestartDate) || days(v.gdSearchRestartDate,v.bridgeExitDate) < 60) errors.push('新重新决策日需在六个月内，求职重启提前至少 60 天。');
+  if (!isDate(v.bridgeExitDate) || v.bridgeExitDate <= today || v.bridgeExitDate > addMonths(today,6) || !isDate(v.gdSearchRestartDate) || v.gdSearchRestartDate < today || days(v.gdSearchRestartDate,v.bridgeExitDate) < 60) errors.push('新重新决策日需在六个月内，求职重启不得早于本次决策且需提前至少 60 天。');
   if (!isDate(v.nextMajorReviewAt) || v.nextMajorReviewAt <= today || v.nextMajorReviewAt > v.bridgeExitDate) errors.push('重大复盘日需在今天之后且不晚于桥接重新决策日。');
   return errors;
 }
@@ -63,9 +63,11 @@ export function offerMoney(o,data) {
   const sixMonthNetGain = improvement !== null && costsKnown && probationKnown ? 6*improvement-o.relocationCost-o.switchingCost-Math.min(6,o.probationMonths)*(o.monthlyNetIncome-(probationIncome ?? o.monthlyNetIncome)):null;
   return {monthlyBalance,improvement,trend,costsKnown,probationKnown,probationBalance,sixMonthNetGain,affordable:monthlyBalance !== null && monthlyBalance >= 0 && current.available !== null && current.available >= 0 && (probationBalance === null || probationBalance >= 0)};
 }
-function offerAssessment(o,data,kind) {
+function offerAssessment(o,data,kind,today) {
   const reasons = [], warnings = [], m = offerMoney(o,data), score = careerScore(o), prior = careerScore(data.baseline), code = kind === 'gd' ? 'R02':'R03';
   if (!['written','accepted'].includes(o?.status)) reasons.push(issue(code,'可比较口头机会；进入 READY 前需书面 Offer。'));
+  if (isDate(today) && isDate(o?.responseDueDate) && o.responseDueDate < today && o.status !== 'accepted') reasons.push(issue('R08','书面机会答复期限已过，先向公司重新确认是否仍有效。'));
+  if (isDate(today) && isDate(o?.startDate) && o.startDate < today) reasons.push(issue('R08','原定入职日已过，先确认并更新入职安排。'));
   if ((o?.careerFacts?.targetFit ?? o?.targetAligned) !== true) reasons.push(issue(code,'长期方向匹配尚未确认。'));
   if (!m.affordable) reasons.push(issue(code,m.monthlyBalance === null ? '当地或当前必要支出尚未知，需确认基本承受能力。':'必要现金流尚不可承受。'));
   if (!m.costsKnown) warnings.push(issue('U01','搬迁 / 切换成本未知：不否决路线，离职前需确认。'));
@@ -83,41 +85,74 @@ function offerAssessment(o,data,kind) {
     if (!((m.trend === 'IMPROVED' && nonregression && (m.sixMonthNetGain === null || m.sixMonthNetGain > 0)) || (upgraded && m.affordable))) reasons.push(issue(code,'需财务明显改善且职业不退步，或职业明显升级且财务可承受。'));
     const review = o?.bridgeExitDate ?? data.routeDecision?.bridgeExitDate, restart = o?.gdSearchRestartDate ?? data.routeDecision?.gdSearchRestartDate;
     if (!isDate(review) || !isDate(o?.startDate) || review <= o.startDate || review > addMonths(o.startDate,data.config?.bridgeMaxMonths ?? 6)) reasons.push(issue(code,'需入职后六个月内的重新决策日，不是强制离职日。'));
-    if (!isDate(restart) || !isDate(review) || days(restart,review) < 60) reasons.push(issue(code,'广东求职重启需早于重新决策日至少 60 天。'));
+    if (!isDate(restart) || !isDate(review) || !isDate(o?.startDate) || restart < o.startDate || days(restart,review) < 60) reasons.push(issue(code,'广东求职重启需不早于入职日，且早于重新决策日至少 60 天。'));
     if (number(m.sixMonthNetGain) && m.sixMonthNetGain < (data.config?.bridgeMinSixMonthGain ?? 30000)) warnings.push(issue('B02','半年净改善低于参考线；明确职业升级仍可支撑桥接。'));
   }
   return {qualified:reasons.length === 0,reasons,warnings,careerScore:score,...m};
 }
-export const qualifyGuangdongOffer = (o,data)=>offerAssessment(o,data,'gd');
-export const qualifyShanghaiOffer = (o,data)=>offerAssessment(o,data,'sh');
-export function routeTendencies(data) {
+export const qualifyGuangdongOffer = (o,data,today=null)=>offerAssessment(o,data,'gd',today);
+export const qualifyShanghaiOffer = (o,data,today=null)=>offerAssessment(o,data,'sh',today);
+export function routeTendencies(data,today=null) {
   if (!validateBaseline(data).valid) return [];
   const current = financialCapacity(data);
   const ranked = (data.offers ?? []).filter(o=>['verbal','written','accepted'].includes(o.status) && (o.city === '上海' || o.city === '广东其他' || (data.profile?.targetCities ?? []).includes(o.city))).map(o=>{
-    const shanghai = o.city === '上海', assessment = shanghai ? qualifyShanghaiOffer(o,data):qualifyGuangdongOffer(o,data);
+    const shanghai = o.city === '上海', assessment = shanghai ? qualifyShanghaiOffer(o,data,today):qualifyGuangdongOffer(o,data,today);
     const career = o.targetAligned === true && number(assessment.careerScore) ? Math.round(25*assessment.careerScore/5):0;
     const finance = assessment.affordable ? 20:assessment.monthlyBalance !== null && assessment.monthlyBalance >= 0 ? 10:0;
-    const bridgePlan = isDate(o.startDate) && isDate(o.bridgeExitDate) && o.bridgeExitDate > o.startDate && o.bridgeExitDate <= addMonths(o.startDate,data.config?.bridgeMaxMonths ?? 6) && isDate(o.gdSearchRestartDate) && days(o.gdSearchRestartDate,o.bridgeExitDate) >= 60;
+    const bridgePlan = isDate(o.startDate) && isDate(o.bridgeExitDate) && o.bridgeExitDate > o.startDate && o.bridgeExitDate <= addMonths(o.startDate,data.config?.bridgeMaxMonths ?? 6) && isDate(o.gdSearchRestartDate) && o.gdSearchRestartDate >= o.startDate && days(o.gdSearchRestartDate,o.bridgeExitDate) >= 60;
     const plan = shanghai ? bridgePlan:((data.profile?.targetCities ?? []).includes(o.city) || o.city === '广东其他');
     const score = (o.status === 'accepted' ? 20:o.status === 'written' ? 15:5)+career+finance+(plan ? 20:0)+(assessment.qualified ? 15:0);
     const checked = [current.stress !== 'UNKNOWN' && validateBaseline(data).valid,['written','accepted'].includes(o.status),['confirmed','likely'].includes(o.certainty),deriveCareer(o.careerFacts).coverage === 5,assessment.monthlyBalance !== null,assessment.costsKnown && assessment.probationKnown,typeof data.partnerPlan?.sharedDestinationAligned === 'boolean'].filter(Boolean).length;
     return {id:o.id,company:o.company,city:o.city,route:shanghai ? '上海桥接':'直接广东',score,qualified:assessment.qualified,reason:assessment.reasons[0]?.text ?? null,confidence:Math.round(checked/7*100),checked};
   }).sort((a,b)=>b.score-a.score);
-  return [...new Map(ranked.map(item=>[item.route,item])).values()].slice(0,2);
+  const best = new Map();
+  for (const item of ranked) if (!best.has(item.route)) best.set(item.route,item);
+  return [...best.values()].slice(0,2);
+}
+function exitFinance(o,data) {
+  const m = offerMoney(o,data), base = financialCapacity(data);
+  const required = nonnegative(o?.monthlyLivingCost) && nonnegative(data.baseline?.monthlyDebtPayment) ? o.monthlyLivingCost+data.baseline.monthlyDebtPayment:null;
+  const liquidity = base.available !== null && m.costsKnown && nonnegative(o?.transitionIncomeGapMonths) && base.required !== null ? base.available-o.relocationCost-o.switchingCost-o.transitionIncomeGapMonths*base.required:null;
+  return {m,unsafe:!m.affordable || liquidity === null || required === null || liquidity < Math.max(required,Math.max(0,-(m.probationBalance ?? 0))*3)};
+}
+function readyOfferIssue(data,today) {
+  const state = data.routeState ?? data.currentState;
+  const notice = state === 'NOTICE_AND_HANDOVER';
+  if (!notice && (!data.currentDecisionId || !['GUANGDONG_READY','SHANGHAI_BRIDGE_READY'].includes(state))) return null;
+  const r = data.routeDecision ?? {}, selected = (data.offers ?? []).find(o=>o.id === r.offerId);
+  if (!selected) return issue('P03','已选路线所依赖的机会不存在，需重新选择并复盘。');
+  if (notice && !['shanghai_bridge','guangdong'].includes(r.route)) return issue('P03','交接期原路线未记录，需确认当前机会与迁移方向。');
+  const shanghai = notice ? r.route === 'shanghai_bridge':state === 'SHANGHAI_BRIDGE_READY';
+  if (shanghai ? selected.city !== '上海' : !((data.profile?.targetCities ?? ['广州','深圳']).includes(selected.city) || selected.city === '广东其他')) return issue('P03','已选机会与原路线的城市不一致，需重新选择并复盘。');
+  const assessment = shanghai ? qualifyShanghaiOffer(selected,data,today):qualifyGuangdongOffer(selected,data,today);
+  const override = r.manualOverride, snapshot = (data.decisions ?? []).find(d=>d.id === data.currentDecisionId)?.recordedOffers?.find(o=>o.id === selected.id);
+  const fields = ['company','city','role','workMode','grossIncome','bonusGuaranteed','targetAligned','careerScore','monthlyNetIncome','monthlyLivingCost','startDate','responseDueDate','bridgeExitDate','gdSearchRestartDate','probationRate','probationMonths','probationNetIncome','relocationCost','switchingCost'];
+  const unchanged = snapshot && fields.every(k=>snapshot[k] === selected[k]) && CAREER_WEIGHTS.every(([k])=>snapshot.careerFacts?.[k] === selected.careerFacts?.[k]);
+  if (notice && (selected.status !== 'accepted' || selected.termsConfirmed !== true || selected.pendingConditionsClear !== true || !assessment.costsKnown || !assessment.probationKnown || exitFinance(selected,data).unsafe || !unchanged)) return issue('P03','交接期机会关键条件或安全垫已变化，先与新公司确认并重新复盘。');
+  if (assessment.qualified) return null;
+  const expired = isDate(today) && ((isDate(selected.startDate) && selected.startDate < today) || (selected.status !== 'accepted' && isDate(selected.responseDueDate) && selected.responseDueDate < today));
+  if (unchanged && override?.stillValid !== false && isDate(override?.nextReviewAt) && override.nextReviewAt > today && assessment.affordable && !expired && ['written','accepted'].includes(selected.status)) return null;
+  return issue('P03','已选机会不再满足路线条件，需依据新事实重大复盘；已记录的职业例外不能代替安全检查。');
 }
 export function resignBlockers(o,data,today) {
   const b = [];
+  const routeIssue = readyOfferIssue(data,today);
+  if (routeIssue) b.push(routeIssue);
+  if (data.currentDecisionId && ['GUANGDONG_READY','SHANGHAI_BRIDGE_READY'].includes(data.routeState) && o?.id !== data.routeDecision?.offerId) b.push(issue('P03','离职机会与正式选择不一致，先重新选择并复盘。'));
+  const reviewWarnings = warningsFor(data,today);
+  if (reviewWarnings.some(w=>['P01','P02','O02','T01'].includes(w.code))) b.push(issue('P04','核心前提或覆盖理由需要重大复盘，先更新正式选择。'));
+  if (reviewWarnings.some(w=>w.code === 'U04')) b.push(issue('U04','新事实尚未同步到财务、机会或关系字段，不能按旧数据离职。'));
+  if (!validateBaseline(data).valid) b.push(issue('F03','核心财务基线不完整，离职前先补齐现金、负债与必要收支。'));
   if (o?.status !== 'accepted') b.push(issue('R01','必须正式接受书面 Offer。'));
   if (o?.termsConfirmed !== true) b.push(issue('R01','需确认薪资、岗位、地点、入职日和试用期条款。'));
   if (o?.pendingConditionsClear !== true) b.push(issue('R01','背调 / 审批等剩余条件尚未确认可接受。'));
   if (!isDate(o?.startDate)) b.push(issue('R01','入职日未确认。'));
+  else if (o.startDate < today) b.push(issue('R08','原定入职日已过，离职前需与新公司确认并更新。'));
   const notice = data.baseline?.contractNoticeDays;
   if (!(o?.noticeAgreementConfirmed === true || (nonnegative(notice) && isDate(o?.startDate) && days(today,o.startDate) >= notice && nonnegative(data.baseline?.availableHandoverDays) && data.baseline.availableHandoverDays >= notice))) b.push(issue('NOTICE_CONFLICT','通知期与入职 / 交接窗口未确认一致，先协商。'));
-  const m = offerMoney(o,data), base = financialCapacity(data);
+  const {m,unsafe} = exitFinance(o,data);
   if (!m.costsKnown || !m.probationKnown || !nonnegative(o?.transitionIncomeGapMonths)) b.push(issue('F02','离职前需确认切换成本、试用期和收入空档；未知不能当作 0。'));
-  const required = nonnegative(o?.monthlyLivingCost) && nonnegative(data.baseline?.monthlyDebtPayment) ? o.monthlyLivingCost+data.baseline.monthlyDebtPayment:null;
-  const liquidity = base.available !== null && m.costsKnown && nonnegative(o?.transitionIncomeGapMonths) && base.required !== null ? base.available-o.relocationCost-o.switchingCost-o.transitionIncomeGapMonths*base.required:null;
-  if (!m.affordable || liquidity === null || required === null || liquidity < Math.max(required,Math.max(0,-(m.probationBalance ?? 0))*3)) b.push(issue('F01','切换后的必要支出安全垫尚未通过；一个月压力测试不是离职许可。'));
+  if (unsafe) b.push(issue('F01','切换后的必要支出安全垫尚未通过；一个月压力测试不是离职许可。'));
   return b;
 }
 function lastSearchDate(data) {
@@ -127,6 +162,10 @@ function lastSearchDate(data) {
 }
 function warningsFor(data,today) {
   const w = [], p = data.partnerPlan ?? {}, r = data.routeDecision ?? {}, state = data.routeState, f = financialCapacity(data);
+  const selectedIssue = readyOfferIssue(data,today);
+  if (selectedIssue) w.push({...selectedIssue,level:'yellow'});
+  if (['GUANGDONG_READY','SHANGHAI_BRIDGE_READY','NOTICE_AND_HANDOVER'].includes(state) && !validateBaseline(data).valid) w.push({code:'F03',level:'yellow',text:'核心财务基线仍有未知项，当前路线不能视为绿色行动许可。'});
+  if ((data.checkIns ?? []).some(x=>x.type === 'light' && x.pendingSync === true)) w.push({code:'U04',level:'yellow',text:'轻检查记录了新事实，但相应结构化字段尚未更新；当前路线仍按旧数据计算。'});
   if (p.sharedDestinationAligned === false) w.push({code:'R06',level:'yellow',text:'共同方向不一致，先讨论方向，不强求同日离职。'});
   else if (isDate(p.longDistanceStartDate) && p.longDistanceStartDate <= today && !isDate(p.reunionDate)) {
     const progressing = p.sharedDestinationAligned === true && isDate(p.nextRelationshipReviewAt) && p.nextRelationshipReviewAt >= today;
@@ -143,7 +182,7 @@ function warningsFor(data,today) {
     const repeated = reviews.length >= 2 && days(reviews[0].createdAt.slice(0,10),latest.createdAt.slice(0,10)) >= cycle;
     w.push({code:'D01',level:reasonable && !repeated ? 'info':latest ? 'yellow':'info',text:!latest ? cycle+' 天无动作：先记录原因，不直接判偏航。':reasonable && !repeated ? '已有合理暂停原因与复查日，不判偏航。':'暂停跨多个周期或没有可复查原因，需要缩小下一步。'});
   }
-  const recent = (data.checkIns ?? []).filter(x=>x.type === 'market').slice(-2);
+  const recent = (data.checkIns ?? []).filter(x=>['market','light'].includes(x.type)).slice(-2);
   if (recent.length === 2 && recent.every(x=>x.waitReason?.trim())) w.push({code:'D03',level:'yellow',text:'连续出现“再等等”，请核对新的未来收益证据。'});
   if (deriveEnergy(data.baseline?.energyFacts) === 'HIGH_RISK' || data.healthSafetyAffected) w.push({code:'E01',level:'yellow',text:'工作体验显示生活受到明显消耗，建议缩短复盘周期；并非医疗判断。'});
   const finance = (data.checkIns ?? []).filter(x=>x.type === 'finance').at(-1);
@@ -170,7 +209,7 @@ function knowledge(data) {
 export function evaluate(data,today) {
   if (!isDate(today)) throw new TypeError('today must be YYYY-MM-DD');
   const r = data.routeDecision ?? {}, actual = data.routeState ?? data.currentState ?? 'BASELINE_SETUP', offers = data.offers ?? [];
-  const gd = offers.filter(o=>qualifyGuangdongOffer(o,data).qualified), sh = offers.filter(o=>qualifyShanghaiOffer(o,data).qualified);
+  const gd = offers.filter(o=>qualifyGuangdongOffer(o,data,today).qualified), sh = offers.filter(o=>qualifyShanghaiOffer(o,data,today).qualified);
   const suggestedRoute = gd.length && sh.length ? 'ROUTE_CHOICE_REQUIRED':gd.length ? 'GUANGDONG_READY':sh.length ? 'SHANGHAI_BRIDGE_READY':!validateBaseline(data).valid ? 'BASELINE_SETUP':today < (data.config?.checkpointOverrides?.december_decision ?? '2026-12-15') && actual !== 'HOLD_AND_SEARCH' ? 'MARKET_TESTING':'HOLD_AND_SEARCH';
   const routeState = ACTIVE.has(actual) || data.currentDecisionId ? actual:suggestedRoute;
   const selected = offers.find(o=>o.id === r.offerId), blockers = data.intent === 'resign' ? resignBlockers(selected,data,today):[], warnings = warningsFor({...data,routeState},today);
@@ -179,10 +218,10 @@ export function evaluate(data,today) {
   if (dueBridge) warnings.push({code:'R09',level:'yellow',text:'上海桥接已到强制重新决策日；旧理由不能自动续期，也不要求裸辞。'});
   const riskState = blockers.length ? 'BLOCKED':warnings.some(w=>w.level === 'red') ? 'RED':warnings.some(w=>w.level === 'yellow') ? 'YELLOW':'GREEN';
   const reasons = suggestedRoute === 'ROUTE_CHOICE_REQUIRED' ? [issue('R04','两地路线均成立：并列比较，由你选择，不按代码顺序选。')]:gd.length ? [issue('R02','广东满足职业和基本财务条件；未知成本在行动前确认。')]:sh.length ? [issue('R03','上海满足双维度准入；30,000 元仅为参考线。')]:[issue('R01','没有已达条件的书面机会，保留收入与选择权并继续验证。')];
-  for (const o of [...gd,...sh]) warnings.push(...(o.city === '上海' ? qualifyShanghaiOffer(o,data):qualifyGuangdongOffer(o,data)).warnings.map(w=>({...w,level:'info'})));
+  for (const o of [...gd,...sh]) warnings.push(...(o.city === '上海' ? qualifyShanghaiOffer(o,data,today):qualifyGuangdongOffer(o,data,today)).warnings.map(w=>({...w,level:'info'})));
   if (gd.some(o=>data.baseline?.bonusAmount > 0 && isDate(data.baseline?.bonusPayDate) && isDate(o.startDate) && o.startDate < data.baseline.bonusPayDate && o.canDelayStart === false)) reasons.push(issue('R05','等待奖金会错过合格机会；奖金不覆盖长期路线。'));
-  const requiresRedecision = dueBridge || warnings.some(w=>['P01','P02','O02','T01'].includes(w.code));
+  const requiresRedecision = dueBridge || warnings.some(w=>['P01','P02','P03','O02','T01'].includes(w.code));
   const nextDates = [addDays(today,['RED','BLOCKED'].includes(riskState) ? 1:7),r.nextMajorReviewAt,r.manualOverride?.nextReviewAt,data.partnerPlan?.nextRelationshipReviewAt,r.gdSearchRestartDate,r.bridgeExitDate,...(data.checkIns ?? []).map(c=>c.nextReviewAt ?? c.pauseReviewAt),...CHECKPOINTS.map(cp=>data.config?.checkpointOverrides?.[cp.id] ?? cp.date),...offers.map(o=>o.responseDueDate)].filter(d=>isDate(d) && d > today).sort();
-  const actions = blockers.length ? blockers.slice(0,3).map(b=>({text:b.text,dueDate:today})):requiresRedecision ? [{text:'逐条复查原前提，用新事实做一次重大决策。',dueDate:today}]:[{text:suggestedRoute === 'ROUTE_CHOICE_REQUIRED' ? '比较两地机会，保存选择与 2–5 条前提。':'记录新事实，或完成“无重要变化”轻检查。',dueDate:addDays(today,7)}];
+  const actions = blockers.length ? blockers.slice(0,3).map(b=>({text:b.text,dueDate:today})):warnings.some(w=>w.code === 'U04') ? [{text:requiresRedecision ? '先把新事实同步到对应字段，再用更新后的数据重大复盘。':'先把轻检查中的新事实同步到对应字段，再重新校准路线。',dueDate:today}]:requiresRedecision ? [{text:'逐条复查原前提，用新事实做一次重大决策。',dueDate:today}]:[{text:suggestedRoute === 'ROUTE_CHOICE_REQUIRED' ? '比较两地机会，保存选择与 2–5 条前提。':'记录新事实，或完成“无重要变化”轻检查。',dueDate:addDays(today,7)}];
   return {routeState,riskState,suggestedRoute,state:routeState,level:riskState === 'GREEN' ? 'green':['RED','BLOCKED'].includes(riskState) ? 'red':'yellow',reasons,warnings,blockers,actions,nextCheckAt:nextDates[0],requiresRedecision,premiseReview:r.decisionPremises ?? [],candidates:{guangdong:gd.map(o=>o.id),shanghai:sh.map(o=>o.id)},finance:financialCapacity(data),...knowledge(data),changingConditions:['出现符合职业与基本财务要求的新书面 Offer','原核心前提失效，或出现新的未来收益证据','收入、关系方向或工作体验出现明显变化']};
 }

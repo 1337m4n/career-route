@@ -50,6 +50,74 @@ test('五问路线倾向只基于已录入机会；百分比和证据置信度�
   d.offers=[{...offer('北京'),careerFacts}];
   assert.deepEqual(routeTendencies(d),[]);
 });
+test('同一路线展示分数最高的机会，不被后面的较差机会覆盖',()=>{
+  const d=fixture(),best={...offer(),id:'best',status:'accepted',careerFacts:Object.fromEntries(['technologyDepth','responsibility','transferability','targetFit','outcomes'].map(key=>[key,true]))},weak={...offer(),id:'weak',status:'verbal',careerScore:2};
+  d.offers=[best,weak];
+  assert.equal(routeTendencies(d,'2026-12-01')[0].id,'best');
+});
+test('正式 READY 机会失效或删除后保留路线历史，但风险升高并要求重选',()=>{
+  let d=fixture(),o=offer();d.offers=[o];
+  d=recordRouteDecision(d,{id:'chosen',routeState:'GUANGDONG_READY',offerId:o.id,decisionPremises:[{text:'职业成长',status:'valid'},{text:'现金可承受',status:'valid'}],nextMajorReviewAt:'2027-03-01'});
+  assert.equal(evaluate(d,'2026-12-01').riskState,'GREEN');
+  o.targetAligned=false;
+  const stale=evaluate(d,'2026-12-01');
+  assert.equal(stale.routeState,'GUANGDONG_READY');assert.equal(stale.riskState,'YELLOW');assert.equal(stale.requiresRedecision,true);assert.ok(stale.warnings.some(w=>w.code==='P03'));
+  Object.assign(o,{status:'accepted',termsConfirmed:true,pendingConditionsClear:true,transitionIncomeGapMonths:0});
+  assert.ok(resignBlockers(o,d,'2026-12-01').some(b=>b.code==='P03'));
+  d.offers=[];
+  assert.ok(evaluate(d,'2026-12-01').warnings.some(w=>w.code==='P03'));
+});
+test('交接期修改已选机会关键条件不能继续显示绿色',()=>{
+  let d=fixture(),o=offer();d.offers=[o];
+  d=recordRouteDecision(d,{id:'notice',routeState:'GUANGDONG_READY',offerId:o.id,route:'guangdong',decisionPremises:[{text:'职业成长',status:'valid'},{text:'现金可承受',status:'valid'}],nextMajorReviewAt:'2027-03-01'});
+  Object.assign(o,{status:'accepted',termsConfirmed:true,pendingConditionsClear:true,transitionIncomeGapMonths:0});
+  d.routeState='NOTICE_AND_HANDOVER';
+  assert.equal(evaluate(d,'2026-12-01').riskState,'GREEN');
+  o.monthlyNetIncome=14000;o.termsConfirmed=false;
+  const changed=evaluate(d,'2026-12-01');
+  assert.equal(changed.routeState,'NOTICE_AND_HANDOVER');assert.equal(changed.riskState,'YELLOW');assert.equal(changed.requiresRedecision,true);assert.ok(changed.warnings.some(w=>w.code==='P03'));
+  o.termsConfirmed=true;
+  assert.ok(evaluate(d,'2026-12-01').warnings.some(w=>w.code==='P03'));
+});
+test('记录在案且未过期的职业例外可保留选择，但不能绕过财务或条款安全门',()=>{
+  let d=fixture(),o=offer();o.careerScore=2;d.offers=[o];
+  d=recordRouteDecision(d,{id:'override',routeState:'GUANGDONG_READY',offerId:o.id,decisionPremises:[{text:'例外职业方向',status:'valid'},{text:'现金可承受',status:'valid'}],manualOverride:{reason:'明确接受成长较慢但可积累项目',nextReviewAt:'2027-02-01'},nextMajorReviewAt:'2027-03-01'});
+  assert.equal(evaluate(d,'2026-12-01').warnings.some(w=>w.code==='P03'),false);
+  Object.assign(o,{status:'accepted',termsConfirmed:true,pendingConditionsClear:true,transitionIncomeGapMonths:0});
+  assert.deepEqual(resignBlockers(o,d,'2026-12-01'),[]);
+  o.termsConfirmed=false;assert.ok(resignBlockers(o,d,'2026-12-01').some(b=>b.code==='R01'));
+  o.termsConfirmed=true;d.baseline.cashBalance=0;assert.ok(resignBlockers(o,d,'2026-12-01').some(b=>b.code==='F01'));
+  d.baseline.cashBalance=25000;o.city='北京';assert.ok(resignBlockers(o,d,'2026-12-01').some(b=>b.code==='P03'));
+});
+test('过期书面答复需重确认；已接受不因答复截止日过期而取消，过期入职日仍需确认',()=>{
+  let d=fixture();const o=offer();o.responseDueDate='2026-11-30';d.offers=[o];
+  assert.equal(qualifyGuangdongOffer(o,d,'2026-12-01').qualified,false);
+  d=recordRouteDecision(d,{id:'expired',routeState:'GUANGDONG_READY',offerId:o.id,decisionPremises:[{text:'成长',status:'valid'},{text:'现金',status:'valid'}],nextMajorReviewAt:'2027-03-01'});
+  assert.equal(evaluate(d,'2026-12-01').requiresRedecision,true);
+  o.status='accepted';assert.equal(qualifyGuangdongOffer(o,d,'2026-12-01').qualified,true);
+  o.startDate='2026-11-30';assert.equal(qualifyGuangdongOffer(o,d,'2026-12-01').qualified,false);
+  assert.ok(resignBlockers(o,d,'2026-12-01').some(b=>b.code==='R08'));
+});
+test('上海求职重启日不能早于入职或本次续期决策',()=>{
+  const d=fixture(),o=offer('上海');o.gdSearchRestartDate='2026-12-01';
+  assert.equal(qualifyShanghaiOffer(o,d,'2026-12-01').qualified,false);
+  const renewal={renewalEvidenceType:'project',evidenceCertainty:'confirmed',newEvidence:'已明确获得一个新的高价值安全工程项目',bridgeExitDate:'2027-06-01',gdSearchRestartDate:'2026-11-30',nextMajorReviewAt:'2027-03-01'};
+  assert.ok(bridgeRenewalErrors(renewal,'2026-12-01').length);
+});
+test('核心财务未知与新事实待同步不能显示无警告绿色 READY 或直接离职',()=>{
+  let d=fixture(),o=offer();d.offers=[o];d.baseline.debtBalance=null;
+  assert.equal(evaluate(d,'2026-12-01').suggestedRoute,'GUANGDONG_READY');
+  assert.equal(evaluate(d,'2026-12-01').riskState,'YELLOW');
+  assert.ok(evaluate(d,'2026-12-01').warnings.some(w=>w.code==='F03'));
+  d.baseline.debtBalance=90000;
+  d=recordRouteDecision(d,{id:'chosen',routeState:'GUANGDONG_READY',offerId:o.id,decisionPremises:[{text:'职业成长',status:'valid'},{text:'现金可承受',status:'valid'}],nextMajorReviewAt:'2027-03-01'});
+  d.checkIns.push({type:'light',createdAt:'2026-12-01T00:00:00Z',waitReason:'还想再等等',pendingSync:true});
+  const result=evaluate(d,'2026-12-01');assert.equal(result.riskState,'YELLOW');assert.ok(result.warnings.some(w=>w.code==='U04'));assert.match(result.actions[0].text,/同步/);
+  Object.assign(o,{status:'accepted',termsConfirmed:true,pendingConditionsClear:true,transitionIncomeGapMonths:0});
+  assert.ok(resignBlockers(o,d,'2026-12-01').some(b=>b.code==='U04'));
+  d.checkIns.push({type:'light',createdAt:'2026-12-02T00:00:00Z',waitReason:'先拿奖金'});
+  assert.ok(evaluate(d,'2026-12-02').warnings.some(w=>w.code==='D03'));
+});
 test('风险与已选路线独立；桥接到期强制复盘不自动离职',()=>{
   const d=fixture();d.routeState='SHANGHAI_BRIDGE_ACTIVE';d.routeDecision.bridgeExitDate='2027-06-01';
   const r=evaluate(d,'2027-06-01');assert.equal(r.routeState,'SHANGHAI_BRIDGE_ACTIVE');assert.equal(r.requiresRedecision,true);assert.equal(r.riskState,'YELLOW');

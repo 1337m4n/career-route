@@ -1,4 +1,4 @@
-import { CHECKPOINTS, createInitialData, loadData, saveData, clearData, importData, downloadBackup, appendDecision, recordRouteDecision, download, isDate } from './data.mjs';
+import { CHECKPOINTS, createInitialData, loadData, saveData, clearData, importData, validateData, downloadBackup, appendDecision, recordRouteDecision, download, isDate } from './data.mjs';
 import { downloadCalendar } from './reminders.mjs';
 import { evaluate, validateBaseline, qualifyGuangdongOffer, qualifyShanghaiOffer, routeTendencies, deriveCareer, deriveEnergy, CAREER_WEIGHTS, financialCapacity, resignBlockers, addMonths, bridgeRenewalErrors } from './rules.mjs';
 
@@ -40,18 +40,18 @@ function addDays(iso, days) { const date = new Date(`${iso}T12:00:00+08:00`); da
 function daysBetween(a, b) { if (!a || !b) return null; return Math.round((Date.parse(`${b}T12:00:00+08:00`) - Date.parse(`${a}T12:00:00+08:00`)) / 86400000); }
 function checkpointDate(item) { return data.config?.checkpointOverrides?.[item.id] || item.date; }
 function checkpoints() { return CHECKPOINTS.map(item => ({ ...item, date: checkpointDate(item) })).sort((a, b) => a.date.localeCompare(b.date)); }
-function nextCheckpoint() { return checkpoints().find(item => item.date >= todayISO()) || checkpoints().at(-1); }
+function nextCheckpoint() { return checkpoints().find(item => item.date >= todayISO()); }
 function viewFromHash() { const raw = location.hash.slice(1); return VIEWS.has(raw) ? raw : 'home'; }
 function notice(text) { toast.textContent = text; toast.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.classList.remove('show'), 3900); }
 function showView(view, tab) { if (tab && FEEDBACK_TABS.includes(tab)) feedbackTab = tab; if (view === currentView) render(); else location.hash = view; window.scrollTo({ top: 0, behavior: 'instant' }); }
-function persistWithDecision(source) {
+function persistWithDecision(source, message = '已保存，并更新当前判断') {
   const decision = evaluate(data, todayISO());
   data.routeState = decision.routeState;
   data.riskState = decision.riskState;
   data = appendDecision(data, { ...decision, source, at: new Date().toISOString() });
   saveData(data);
   render();
-  notice('已保存，并更新当前判断');
+  notice(message);
 }
 function pageHeader(title, note = '') { return `<header class="page-header"><div><h1>${escapeHTML(title)}</h1><p class="page-date">${dateLabel(todayISO())}</p></div>${note ? `<p class="page-note">${escapeHTML(note)}</p>` : ''}</header>`; }
 function section(title, body, lead = '') { return `<section class="section"><h2>${escapeHTML(title)}</h2>${lead ? `<p class="section-lead">${escapeHTML(lead)}</p>` : ''}${body}</section>`; }
@@ -94,19 +94,34 @@ function addFact(type,value,certainty='confirmed',source='user') {
   if (!value?.trim()) return;
   data.facts.push({id:uid(),type,value:value.trim(),certainty,recordedAt:new Date().toISOString(),source,supersedes:null});
 }
+const syncLabels={financial:'财务数字',offer:'机会列表',career:'职业事实',energy:'工作体验',relationship:'关系计划'};
+function syncConfirmation(type) {
+  const pending=data.checkIns.filter(item=>item.type === 'light' && item.pendingSync && item.factType === type);
+  if (!pending.length) return '';
+  return `<label class="field full"><span class="field-label">待同步的${syncLabels[type]}变化（${pending.length} 条）</span><span class="field-help">${pending.map(item=>escapeHTML(item.newFact)).join('<br />')}</span><span><input type="checkbox" name="sync_${type}" value="true" /> 我已逐条核对，上述变化都已反映在对应的结构化字段中</span></label>`;
+}
+function resolvePendingFacts(v,...types) {
+  const syncedAt=new Date().toISOString();
+  for (const item of data.checkIns) if (item.type === 'light' && item.pendingSync && types.includes(item.factType) && v['sync_'+item.factType] === 'true') {
+    item.pendingSync=false;item.syncedAt=syncedAt;
+  }
+}
 function renderFiveQuestions(d) {
-  const r=data.routeDecision, ps=r.decisionPremises ?? [], latest=data.facts.slice(-3).reverse(), tendencies=routeTendencies(data);
+  const r=data.routeDecision, ps=r.decisionPremises ?? [], latest=data.facts.slice(-3).reverse(), tendencies=routeTendencies(data,todayISO());
   const baselineReady=validateBaseline(data).valid, selected=data.offers.find(o=>o.id===r.offerId), focusOffer=selected ?? data.offers.at(-1), current=data.baseline;
   const routeName=r.route === 'guangdong' ? '直接广东':r.route === 'shanghai_bridge' ? '上海桥接':null;
   const nextAction=baselineReady ? d.actions[0]?.text || '按期核对事实。':'完成首次事实基线，确认现金、负债、收入和必要支出。';
-  const confidenceLabel=n=>n >= 85 ? '高':n >= 50 ? '中':'低';
-  const tendencyRows=tendencies.length ? `<div class="route-tendencies">${tendencies.map(t=>`<div class="route-tendency"><div class="route-tendency-title"><strong>${escapeHTML(t.route)} · 规则契合 ${t.score}%</strong><span>置信度${confidenceLabel(t.confidence)} ${t.confidence}%</span></div><meter class="route-meter" min="0" max="100" value="${t.score}" aria-label="${escapeHTML(t.route)}规则倾向"></meter><p>${escapeHTML(t.company || '未命名机会')} · ${t.qualified ? '达到路线参考条件，离职仍需安全检查':`尚未达标：${escapeHTML(t.reason || '继续核实关键条件')}`}</p><small>证据已核实 ${t.checked}/7 项</small></div>`).join('')}</div><p class="question-note">百分比是各路线独立的规则契合度，不是成功概率，也不要求相加为 100%；置信度是 7 项关键证据的覆盖率。高分不能绕过书面 Offer、财务和离职安全门。</p>`:`<p class="question-note">暂无可评分的口头或书面机会；不凭空给广东或上海分配百分比。${baselineReady ? '先录入真实机会并继续验证市场。':'先补齐基线并验证市场。'}</p>`;
+  const tendencyRows=tendencies.length ? `<div class="route-tendencies">${tendencies.map(t=>`<div class="route-tendency"><div class="route-tendency-title"><strong>${escapeHTML(t.route)} · 规则契合 ${t.score}%</strong><span>证据覆盖率 ${t.checked}/7（${t.confidence}%）</span></div><meter class="route-meter" min="0" max="100" value="${t.score}" aria-label="${escapeHTML(t.route)}规则倾向"></meter><p>${escapeHTML(t.company || '未命名机会')} · ${t.qualified ? '达到路线参考条件，离职仍需安全检查':`尚未达标：${escapeHTML(t.reason || '继续核实关键条件')}`}</p></div>`).join('')}</div><p class="question-note">百分比是各路线独立的规则契合度，不是成功概率，也不要求相加为 100%；证据覆盖率只表示 7 项资料是否已填写，不代表资料真实可靠。高分不能绕过书面 Offer、财务和离职安全门。</p>`:`<p class="question-note">暂无可评分的口头或书面机会；不凭空给广东或上海分配百分比。${baselineReady ? '先录入真实机会并继续验证市场。':'先补齐基线并验证市场。'}</p>`;
   const reasons=ps.length ? `<p class="question-result">${r.decidedAt ? dateLabel(r.decidedAt)+'保存的选择':'已保存的选择'}${r.routeState ? `：${escapeHTML(STATE_LABELS[r.routeState] || r.routeState)}`:''}</p>${selected ? `<p>对应机会：${escapeHTML(selected.company)} · ${escapeHTML(selected.city)}</p>`:''}<ul class="plain-list">${ps.map(p=>`<li>${escapeHTML(p.text)}</li>`).join('')}</ul>${r.manualOverride ? `<p class="warning-note">例外理由：${escapeHTML(r.manualOverride.reason)}</p>`:''}`:`<p class="question-result">尚未保存正式选择</p><p>以下只是当前规则的临时依据，不是你当初写下的理由：</p><ul class="plain-list">${d.reasons.map(x=>`<li>${escapeHTML(x.text)}</li>`).join('')}</ul>`;
   const unknowns=d.unknowns.slice(0,2);
   const premises=ps.length ? `<p class="question-result">${ps.filter(p=>p.status==='valid').length}/${ps.length} 条标记为成立</p><ul class="plain-list">${ps.map(p=>`<li><strong>${escapeHTML(premiseLabels[p.status] || '未知')}</strong> · ${escapeHTML(p.text)}<small>（${p.reviewedAt ? `${dateLabel(p.reviewedAt)}复核`:'决策后未逐条复核'}）</small></li>`).join('')}</ul>`:'<p class="question-result">没有可复核的正式前提</p><p>先在重大复盘中记录 2–5 条；不会替旧存档补写理由。</p>';
   const uncertainty=unknowns.length ? `<p class="question-note">待核实：${unknowns.map(escapeHTML).join('；')}${d.unknowns.length>2 ? `；另有 ${d.unknowns.length-2} 项` : ''}</p>`:'';
   const factLabels={confirmed:'已确认',likely:'很可能',rough:'粗略估计',unknown:'未知'};
   const facts=latest.length ? `<ul class="plain-list">${latest.map(f=>`<li>${escapeHTML(f.value)}<small> · ${f.recordedAt ? dateLabel(f.recordedAt):'日期未记录'} · ${escapeHTML(factLabels[f.certainty] || '确定程度未记录')}</small></li>`).join('')}</ul>`:'<p>尚未单独记录新事实；“无重要变化”不算新事实。</p>';
+  const pending=data.checkIns.filter(item=>item.type === 'light' && item.pendingSync);
+  const syncTargets={financial:['同步财务','feedback','finance'],offer:['同步机会','offers',null],career:['同步职业事实','feedback','baseline'],energy:['同步工作体验','feedback','baseline'],relationship:['同步关系计划','feedback','relationship']};
+  const pendingLinks=[...new Set(pending.map(item=>item.factType))].map(type=>syncTargets[type]).filter(Boolean).map(([label,view,tab])=>`<button type="button" class="text-link" data-view="${view}" ${tab ? `data-tab="${tab}"`:''}>${label}</button>`).join(' ');
+  const pendingNote=pending.length ? `<div class="inline-alert">有 ${pending.length} 条新事实只保存了文字，尚未同步到计算字段；下方读数可能仍是旧值。请确认同类变化都已填入对应表单：${pendingLinks}</div>`:'';
   const snapshot=`<p class="question-note">当前读数（不代表刚更新）：现金 ${money(current.cashBalance)} · 负债 ${money(current.debtBalance)} · 月度差额 ${money(d.finance.monthlyBalance)}${focusOffer ? `；${selected ? '已选':'最新录入'}机会 ${escapeHTML(focusOffer.city)} / 到手 ${money(focusOffer.monthlyNetIncome)}`:''}；共同方向${data.partnerPlan.sharedDestinationAligned === true ? '一致':data.partnerPlan.sharedDestinationAligned === false ? '未一致':'未确认'}。</p>`;
   const signals=[...d.blockers,...d.warnings.filter(w=>['yellow','red'].includes(w.level))];
   const driftResult=!baselineReady ? '资料不足，不能判定是否偏航':d.requiresRedecision ? '需要重新校准原路线':d.blockers.length ? '离职动作被阻止，路线不自动作废':signals.length ? '有风险信号，不等于路线已错':'目前未触发偏航规则';
@@ -115,15 +130,15 @@ function renderFiveQuestions(d) {
     <article class="question-primary"><h3>1. 我现在走什么路线？</h3><p class="question-result">当前动作：${escapeHTML(STATE_LABELS[d.routeState])}${routeName ? ` · 已选方向：${routeName}`:''}</p><p>${data.currentDecisionId ? '这是你保存过的路线；风险不会自动抹掉选择。':'这是系统基于现有资料的临时判断，尚未替你做正式选择。'} 系统当前建议：${escapeHTML(STATE_LABELS[d.suggestedRoute])}。</p>${tendencyRows}<p class="question-next">下一步：${escapeHTML(nextAction)}</p></article>
     <article><h3>2. 当初为什么这样选？</h3>${reasons}<button type="button" class="text-link" data-view="feedback" data-tab="major">${ps.length ? '复查原理由':'保存正式选择与理由'}</button></article>
     <article><h3>3. 哪些前提仍成立？</h3>${premises}${uncertainty}${r.manualOverride ? `<p class="question-note">例外理由于 ${dateLabel(r.manualOverride.nextReviewAt)} 复查。</p>`:''}<button type="button" class="text-link" data-view="feedback" data-tab="major">逐条核对前提</button></article>
-    <article><h3>4. 最近出现什么新事实？</h3><p class="question-result">${latest.length ? `最近记录 ${latest.length} 条变化`:'尚无新变化记录'}</p>${facts}${snapshot}<button type="button" class="text-link" data-view="feedback" data-tab="light">记录变化或轻检查</button></article>
+    <article><h3>4. 最近出现什么新事实？</h3><p class="question-result">${latest.length ? `最近记录 ${latest.length} 条变化`:'尚无新变化记录'}</p>${facts}${pendingNote}${snapshot}<button type="button" class="text-link" data-view="feedback" data-tab="light">记录变化或轻检查</button></article>
     <article><h3>5. 有没有偏航？</h3><p class="question-result">${driftResult}</p>${!baselineReady ? '<p>先补齐现金、负债、收入和必要支出，暂不作“没有偏航”的结论。</p>':signals.length ? `<ul class="plain-list">${signals.slice(0,3).map(x=>`<li><span class="rule-code">${escapeHTML(x.code)}</span>${escapeHTML(x.text)}</li>`).join('')}</ul>`:'<p>当前没有触发强制复盘的已知信号；仍需按期更新事实。</p>'}${difference}<p class="question-next">下一步：${escapeHTML(nextAction)}</p><button type="button" class="text-link" data-view="feedback" data-tab="${!baselineReady ? 'baseline':d.requiresRedecision ? 'major':'light'}">${!baselineReady ? '补齐事实基线':d.requiresRedecision ? '开始重大复盘':'查看检查入口'}</button></article>
-  </div><details><summary>规则倾向与置信度怎么算？</summary><p>规则倾向权重：Offer 成熟度 20、职业成长 25、必要现金流 20、路线时间线 20、准入条件 15。置信度只统计财务基线、书面状态、机会确定程度、职业事实、当地收支、切换成本与试用期、双方方向这 7 项资料是否核实；不预测未来。</p></details>`);
+  </div><details><summary>规则倾向与证据覆盖率怎么算？</summary><p>规则倾向权重：Offer 成熟度 20、职业成长 25、必要现金流 20、路线时间线 20、准入条件 15。证据覆盖率只统计财务基线、书面状态、机会确定程度、职业事实、当地收支、切换成本与试用期、双方方向这 7 项资料是否填写；不判断真假，也不预测未来。</p></details>`);
 }
 function renderLightForm() {
-  return `<p class="form-intro">先看有没有重要变化。“无重要变化”只记录这次检查，不刷新旧事实、Offer 条款或求职动作日期。</p><div class="btn-row"><button class="btn btn-primary" type="button" data-action="no-change">无重要变化</button><button class="btn btn-secondary" type="button" data-tab="major">需要重大复盘</button></div><form id="light-form">
+  return `<p class="form-intro">先看有没有重要变化。“无重要变化”只记录这次检查，不刷新旧事实、Offer 条款或求职动作日期。文字变化会保存，但不会自动解析为现金、岗位或关系条件；涉及这些变化时，还需同步对应表单。</p><div class="btn-row"><button class="btn btn-primary" type="button" data-action="no-change">无重要变化</button><button class="btn btn-secondary" type="button" data-tab="major">需要重大复盘</button></div><form id="light-form">
   ${formSection('有变化时，只记录新的部分',select('factType','事实类别','other',[['offer','新 Offer / 条件变化'],['financial','收入 / 债务 / 现金'],['career','职责 / 技术 / 履历'],['energy','工作体验'],['relationship','关系 / 迁移'],['other','其他']])+
-  certaintySelect('certainty','确定程度','confirmed')+textarea('newFact','发生了什么新变化','',{required:true})+textarea('waitReason','新的“再等等”理由','')+input('nextReviewAt','希望提前复盘日',null,{type:'date'}),'记录后立即校准；具体数字变化请到财务、机会或关系页更新。')}
-  ${formActions('记录变化并校准')}</form>`;
+  certaintySelect('certainty','确定程度','confirmed')+textarea('newFact','发生了什么新变化','',{required:true})+textarea('waitReason','新的“再等等”理由','')+input('nextReviewAt','希望提前复盘日',null,{type:'date'}),'涉及财务、机会、职业、体验或关系的文字会标记待同步；请到对应表单逐条核对，主动勾选后才清除提醒。')}
+  ${formActions('记录变化')}</form>`;
 }
 function renderMajorForm() {
   const r=data.routeDecision,d=evaluate(data,todayISO()),ps=r.decisionPremises ?? [];
@@ -159,7 +174,7 @@ function renderHome() {
     renderFiveQuestions(decision) +
     section('接下来的关键节点', renderTimelineRail(), '复盘日要求更新判断，不要求到点离职。') +
     `<section class="section split-grid"><div><h2>已知财务基线</h2>${renderFinanceSummary()}</div><div><h2>接下来</h2>${renderActions(decision, baselineCheck.valid)}</div></section>` +
-    `<section class="section"><h2>下次检查</h2><p class="lead">${next ? `${escapeHTML(dateLabel(next.date))} · ${escapeHTML(next.label)}（${escapeHTML(relativeDue(next.date))}）` : '暂无计划节点'}</p><button type="button" class="text-link" data-view="timeline">查看完整时间线</button></section>`;
+    `<section class="section"><h2>下次检查</h2><p class="lead">${next ? `${escapeHTML(dateLabel(next.date))} · ${escapeHTML(next.label)}（${escapeHTML(relativeDue(next.date))}）` : `${escapeHTML(dateLabel(decision.nextCheckAt))} · 动态复盘（${escapeHTML(relativeDue(decision.nextCheckAt))}）`}</p><button type="button" class="text-link" data-view="timeline">查看完整时间线</button></section>`;
 }
 function renderSetupHero(check) {
   const labels = { debtBalance: '最新负债余额', cashBalance: '可用现金', gdMinNetIncome: '广东最低到手收入', maxLongDistanceDays: '双方异地上限', currentRoleGrowth: '当前岗位成长性', energyLevel: '当前精力状态', sharedDestinationAligned: '双方最终方向', monthlyNetIncome: '月到手收入', monthlyDebtPayment: '当前月供', monthlyLivingCost: '生活支出', oneOffCostsNext90Days: '未来90天一次性支出', gdMinCareerScore: '广东岗位最低成长分', bridgeMinSixMonthGain: '上海桥接财务门槛', bridgeMaxMonths: '上海桥接最长月数', contractNoticeDays: '合同通知期', preferredHandoverDays: '期望交接天数', targetRoles: '目标岗位方向' };
@@ -169,7 +184,7 @@ function renderSetupHero(check) {
 }
 function renderDecisionHero(d) {
   const risks = [...d.blockers.map(x=>({...x,level:'red'})),...d.warnings.filter(x=>x.level !== 'info')];
-  return `<div><div class="decision-banner ${d.level}"><div class="decision-topline"><span class="level ${d.level}">${escapeHTML({GREEN:'当前未发现显著风险',YELLOW:'需要关注',RED:'需要重新校准',BLOCKED:'离职动作被阻止'}[d.riskState])}</span></div><h2 class="hero-title">${escapeHTML(STATE_LABELS[d.routeState])}</h2><p class="hero-copy">系统建议：${escapeHTML(STATE_LABELS[d.suggestedRoute])}。路线和风险独立，选择权始终由你保留。下次检查：${dateLabel(d.nextCheckAt)}。</p></div><div class="btn-row"><button class="btn btn-primary" type="button" data-view="feedback" data-tab="${d.requiresRedecision ? 'major':'light'}">${d.requiresRedecision ? '重大复盘':'轻检查'}</button><button class="btn btn-secondary" type="button" data-view="feedback" data-tab="major">保存我的路线选择</button>${nextStageButton(d.routeState)}${data.intent === 'resign' ? '<button class="btn btn-quiet" type="button" data-action="withdraw-resign">暂不提离职</button>':''}</div></div><div><h3>规则依据与行动边界</h3><ul class="plain-list">${d.reasons.map(x=>`<li><span class="rule-code">${x.code}</span>${escapeHTML(x.text)}</li>`).join('')}</ul>${risks.length ? `<div class="inline-alert ${d.level === 'red' ? 'red':''} spaced-top">${risks.map(x=>escapeHTML(x.text)).join('<br />')}</div>`:''}<p class="note">${d.evidenceCounts.confirmed} 条确认记录 · ${d.evidenceCounts.estimates} 条估计 · ${d.evidenceCounts.unknown} 个未知。数量不是可信概率。</p></div>`;
+  return `<div><div class="decision-banner ${d.level}"><div class="decision-topline"><span class="level ${d.level}">${escapeHTML({GREEN:'当前未发现显著风险',YELLOW:'需要关注',RED:'需要重新校准',BLOCKED:'离职动作被阻止'}[d.riskState])}</span></div><h2 class="hero-title">${escapeHTML(STATE_LABELS[d.routeState])}</h2><p class="hero-copy">系统建议：${escapeHTML(STATE_LABELS[d.suggestedRoute])}。路线和风险独立，选择权始终由你保留。下次检查：${dateLabel(d.nextCheckAt)}。</p></div><div class="btn-row"><button class="btn btn-primary" type="button" data-view="feedback" data-tab="${d.requiresRedecision ? 'major':'light'}">${d.requiresRedecision ? '重大复盘':'轻检查'}</button><button class="btn btn-secondary" type="button" data-view="feedback" data-tab="major">保存我的路线选择</button>${d.requiresRedecision && ['GUANGDONG_READY','SHANGHAI_BRIDGE_READY'].includes(d.routeState) ? '' : nextStageButton(d.routeState)}${data.intent === 'resign' ? '<button class="btn btn-quiet" type="button" data-action="withdraw-resign">暂不提离职</button>':''}</div></div><div><h3>规则依据与行动边界</h3><ul class="plain-list">${d.reasons.map(x=>`<li><span class="rule-code">${x.code}</span>${escapeHTML(x.text)}</li>`).join('')}</ul>${risks.length ? `<div class="inline-alert ${d.level === 'red' ? 'red':''} spaced-top">${risks.map(x=>escapeHTML(x.text)).join('<br />')}</div>`:''}<p class="note">${d.evidenceCounts.confirmed} 条确认记录 · ${d.evidenceCounts.estimates} 条估计 · ${d.evidenceCounts.unknown} 个未知。数量不是可信概率。</p></div>`;
 }
 
 function nextStageButton(state) {
@@ -182,6 +197,7 @@ function nextStageButton(state) {
 function renderTimelineRail() {
   const items = checkpoints();
   const next = nextCheckpoint();
+  if (!next) return '<p>固定节点已全部结束；请按下方“下次检查”的动态复盘日期继续更新。</p>';
   const selected = [items[0], ...items.filter(item => item.date >= todayISO()).slice(0, 3)].filter(Boolean).filter((item, index, arr) => arr.findIndex(x => x.id === item.id) === index).slice(0, 4);
   return `<div class="timeline-rail" aria-label="近期关键节点">${selected.map(item => `<div class="timeline-node ${item.id === next?.id ? 'is-current' : ''}"><b>${escapeHTML(shortDate(item.date))}</b><span>${escapeHTML(item.label)}</span></div>`).join('')}</div>`;
 }
@@ -191,7 +207,8 @@ function renderFinanceSummary() {
 }
 
 function renderActions(decision, baselineValid) {
-  const fallback = [{ text: '完成首次基线信息填写', dueDate: nextCheckpoint()?.date }, { text: '核实当前负债与现金', dueDate: nextCheckpoint()?.date }, { text: '在关键节点前更新信息', dueDate: nextCheckpoint()?.date }];
+  const dueDate=nextCheckpoint()?.date ?? decision.nextCheckAt;
+  const fallback = [{ text: '完成首次基线信息填写', dueDate }, { text: '核实当前负债与现金', dueDate }, { text: '在关键节点前更新信息', dueDate }];
   const actions = baselineValid ? (decision.actions || []) : fallback;
   return `<ol class="task-list">${actions.slice(0, 3).map(item => `<li><b>${escapeHTML(item.text)}</b><span>${item.dueDate ? `截止 ${escapeHTML(dateLabel(item.dueDate))}` : '在下一次复盘前完成'}</span></li>`).join('')}</ol>`;
 }
@@ -199,10 +216,11 @@ function renderActions(decision, baselineValid) {
 function renderFeedback() {
   const tabs = FEEDBACK_TABS.map(tab => `<button class="tab ${feedbackTab === tab ? 'active' : ''}" type="button" data-tab="${tab}" aria-selected="${feedbackTab === tab}">${TAB_LABELS[tab]}</button>`).join('');
   const bodies = { light: renderLightForm, major: renderMajorForm, baseline: renderBaselineForm, market: renderMarketForm, finance: renderFinanceForm, relationship: renderRelationshipForm, resign: renderResignForm };
-  return pageHeader('填写反馈', '每次反馈后立即更新路线') + `<div class="tabs" role="tablist" aria-label="反馈类型">${tabs}</div>${bodies[feedbackTab]()}`;
+  return pageHeader('填写反馈', '结构化信息保存后重算；自由文字需同步对应字段') + `<div class="tabs" role="tablist" aria-label="反馈类型">${tabs}</div>${bodies[feedbackTab]()}`;
 }
 function renderBaselineForm() {
   const b=data.baseline,c=data.config,p=data.partnerPlan;
+  const syncFields=['financial','career','energy','relationship'].map(syncConfirmation).join('');
   return `<p class="form-intro">只填今天能确认的信息。未知可以留空；通知期、未来搬迁和对方精确日期不阻止初始化。</p><form id="baseline-form">
   ${formSection('1. 当前财务',
     ['debtBalance','cashBalance','monthlyNetIncome','monthlyDebtPayment','monthlyLivingCost'].map((key,i)=>input(key,['全部负债余额','可用现金','月到手收入','月债务支出','基本生活支出'][i],b[key],{type:'number',min:0,step:'.01',help:'不知道可留空，不会被当作 0。'})).join('')+
@@ -216,6 +234,7 @@ function renderBaselineForm() {
     input('gdMinNetIncome','个人广东收入底线（可选）',c.gdMinNetIncome,{type:'number',min:0,step:'.01'})+
     input('contractNoticeDays','合同通知期（天）',b.contractNoticeDays,{type:'number',min:0,max:365,step:1})+
     input('bonusAmount','已知奖金金额',b.bonusAmount,{type:'number',min:0,step:'.01'})+input('bonusPayDate','奖金预计到账日',b.bonusPayDate,{type:'date'}))}
+  ${syncFields ? formSection('待同步事实核对',syncFields,'只有逐条核对并主动勾选，才会清除待同步提醒。') : ''}
   ${formActions('保存已知事实')}</form>`;
 }
 
@@ -244,7 +263,7 @@ function renderFinanceForm() {
       input('oneOffCostsNext90Days','未来90天已知一次性支出',b.oneOffCostsNext90Days,{type:'number',min:0,step:'.01',required:false})+
       input('plannedCashBalance','原计划本月可用现金',null,{type:'number',min:0,step:'.01',help:'可留空；填写后系统检查实际偏差。'})+
       input('plannedDebtBalance','原计划本月负债余额',null,{type:'number',min:0,step:'.01',help:'可留空；填写后系统检查实际偏差。'})+
-      textarea('financeNote','变化原因或备注','',{placeholder:'例如月供下降、房租、搬迁费用。'}))}
+      textarea('financeNote','变化原因或备注','',{placeholder:'例如月供下降、房租、搬迁费用。'})+syncConfirmation('financial'))}
     ${formActions('保存财务反馈')}</form>`;
 }
 function renderRelationshipForm() {
@@ -260,7 +279,7 @@ function renderRelationshipForm() {
     input('longDistanceStartDate','异地开始日（如已知）',p.longDistanceStartDate,{type:'date'})+
     input('reunionDate','精确汇合日（可未知）',p.reunionDate,{type:'date'})+
     input('travelPlan','往返安排',p.travelPlan,{full:true})+
-    input('reunionNextAction','下一次推动计划的动作',p.reunionNextAction,{full:true}))}
+    input('reunionNextAction','下一次推动计划的动作',p.reunionNextAction,{full:true})+syncConfirmation('relationship'))}
   ${formActions('保存关系变化')}</form>`;
 }
 
@@ -268,7 +287,8 @@ function renderResignForm() {
   const accepted = data.offers.filter(offer => offer.status === 'accepted');
   const selectedId = data.routeDecision?.offerId || accepted[0]?.id || '';
   const b = data.baseline || {};
-  return `<p class="form-intro">只有已接受书面 Offer、关键条件、通知期和过渡财务都确认后，才能进入通知与交接；路线覆盖不能绕过安全门。</p>${accepted.length ? '' : '<div class="inline-alert">目前没有“已接受”的 Offer。你仍可填写检查项，但系统会拦截正式提离职。</div>'}<form id="resign-form">
+  const needsReview=evaluate(data,todayISO()).requiresRedecision;
+  return `<p class="form-intro">只有已接受书面 Offer、关键条件、通知期和过渡财务都确认后，才能进入通知与交接；路线覆盖不能绕过安全门。</p>${needsReview ? '<div class="inline-alert">已选路线的依据需要重新核实。请先做重大复盘，再检查离职条件；在此填写不能代替复盘。</div>' : ''}${accepted.length ? '' : '<div class="inline-alert">目前没有“已接受”的 Offer。你仍可填写检查项，但系统会拦截正式提离职。</div>'}<form id="resign-form">
     ${formSection('Offer 与通知期',
       select('offerId','已接受的 Offer',selectedId,accepted.map(offer=>[offer.id,`${offer.company || '未命名公司'} · ${offer.city} · ${offer.role || '岗位待确认'}`]),{required:true})+
       input('contractNoticeDays','合同通知期（天）',b.contractNoticeDays,{type:'number',min:0,max:365,step:1,required:true})+
@@ -288,7 +308,7 @@ function renderOffers() {
   const baseNet = [b.monthlyNetIncome,b.monthlyLivingCost,b.monthlyDebtPayment].every(x=>x!=null) ? Number(b.monthlyNetIncome)-Number(b.monthlyLivingCost)-Number(b.monthlyDebtPayment) : null;
   const offers = data.offers || [];
   const rows = offers.map(offer => {
-    const result = offer.city === '上海' ? qualifyShanghaiOffer(offer,data) : qualifyGuangdongOffer(offer,data);
+    const result = offer.city === '上海' ? qualifyShanghaiOffer(offer,data,todayISO()) : qualifyGuangdongOffer(offer,data,todayISO());
     const gain = result.sixMonthNetGain;
     return `<tr><td><strong>${escapeHTML(offer.company || '未命名公司')}</strong><small>${escapeHTML(offer.city)} · ${escapeHTML(offer.role || '岗位待补')}</small></td><td>${escapeHTML({none:'尚无Offer',verbal:'口头',written:'书面',accepted:'已接受'}[offer.status] || offer.status)}</td><td class="num">${money(offer.monthlyNetIncome)}</td><td class="num">${money(offer.monthlyLivingCost)}</td><td class="num">${gain == null ? '待计算' : money(gain)}</td><td>${escapeHTML(result.careerScore ?? '未知')}${result.careerScore == null ? '':'/5'}<small>${escapeHTML({IMPROVED:'财务明显改善',SIMILAR:'财务大致持平',WORSE:'财务明显恶化',UNKNOWN:'财务方向未知'}[result.trend])}</small></td><td><span class="${result.qualified ? 'qualify' : 'not-qualify'}">${result.qualified ? '路线候选' : '需核实'}</span><small>${escapeHTML([...(result.reasons || []),...(result.warnings || [])].slice(0,2).map(reason => typeof reason === 'string' ? reason : reason.text).join('；'))}</small></td><td><button class="text-link" type="button" data-action="edit-offer" data-id="${escapeHTML(offer.id)}">编辑</button><br /><button class="text-link error-note" type="button" data-action="delete-offer" data-id="${escapeHTML(offer.id)}">删除</button></td></tr>`;
   }).join('');
@@ -301,6 +321,7 @@ function renderOffers() {
 function renderOfferForm(o) {
   const c = data.config || {}, d = data.routeDecision || {};
   const cityItems = [['广州','广州'],['深圳','深圳'],['广东其他','广东其他'],['上海','上海']];
+  const pendingOffer=syncConfirmation('offer');
   return `<form id="offer-form"><input type="hidden" name="id" value="${escapeHTML(o.id || '')}" />
     ${formSection('岗位与条件',
       input('company','公司名称',o.company,{required:true})+
@@ -333,6 +354,7 @@ function renderOfferForm(o) {
       input('bridgeExitDate','桥接强制重新决策日',o.bridgeExitDate || d.bridgeExitDate,{type:'date',help:'上海路线必须在入职后六个月内复盘。'})+
       input('gdSearchRestartDate','重新启动广东求职日',o.gdSearchRestartDate || d.gdSearchRestartDate,{type:'date',help:'至少比桥接重新决策日早 60 天。'}),
       '仅上海岗位需要填写。2027 年 6 月是固定复盘点，实际入职日起六个月也是独立上限。')}
+    ${pendingOffer ? formSection('待同步机会事实',pendingOffer,'请核对机会列表中的全部相关变化，不只核对当前岗位。') : ''}
     ${formActions(editingOfferId ? '保存修改并重算' : '保存机会并重算')}
     ${editingOfferId ? '<button type="button" class="text-link" data-action="cancel-edit">取消编辑</button>' : ''}</form>`;
 }
@@ -395,6 +417,7 @@ function saveBaseline(form) {
   data.partnerPlan.sharedDestinationAligned=bool(v.sharedDestinationAligned);
   data.partnerPlan.nextRelationshipReviewAt=v.nextRelationshipReviewAt || null;
   data.profile.targetRoles=v.targetRoles.split(/[、,，]/).map(x=>x.trim()).filter(Boolean);
+  resolvePendingFacts(v,'financial','career','energy','relationship');
   addFact('other','更新首次事实基线；未知内容未补成数值。',v.financeCertainty);
   persistWithDecision('首次基线');showView('home');
 }
@@ -416,6 +439,7 @@ function saveFinance(form) {
   data.checkIns.push(entry);
   addFact('financial','更新当前财务数值；未录入数值仍为未知。');
   for (const key of ['debtBalance','cashBalance','monthlyNetIncome','monthlyDebtPayment','monthlyLivingCost','oneOffCostsNext90Days']) data.baseline[key]=entry[key];
+  resolvePendingFacts(v,'financial');
   persistWithDecision('每月财务反馈');
   showView('home');
 }
@@ -427,6 +451,7 @@ function saveRelationship(form) {
   Object.assign(data.partnerPlan,plan);data.config.maxLongDistanceDays=plan.maxLongDistanceDays;
   data.checkIns.push({id:uid(),type:'relationship',createdAt:new Date().toISOString(),...plan});
   addFact('relationship','关系计划更新：'+(plan.moveTimeValue || '精确时间仍未知')+'；下次共同讨论 '+(plan.nextRelationshipReviewAt || '待约定'),plan.certainty);
+  resolvePendingFacts(v,'relationship');
   persistWithDecision('关系变化');showView('home');
 }
 
@@ -456,6 +481,7 @@ function saveOffer(form) {
   if (existing && critical.some(k=>existing[k] !== offer[k])) {offer.termsConfirmed=false;offer.pendingConditionsClear=false;}
   if (existing) Object.assign(existing,offer);else data.offers.push(offer);
   addFact('offer',(existing ? '机会条件更新：':'新增机会：')+offer.company+' / '+offer.role+' / '+offer.city,offer.certainty);
+  resolvePendingFacts(v,'offer');
   editingOfferId=null;persistWithDecision(existing ? '修改 Offer（关键条件需重新确认）':'新增 Offer');
 }
 
@@ -473,8 +499,9 @@ function saveSettings(form) {
 
 function saveLight(form) {
   const v=getForm(form);addFact(v.factType,v.newFact,v.certainty);
-  data.checkIns.push({id:uid(),type:'light',createdAt:new Date().toISOString(),newFact:v.newFact.trim(),waitReason:v.waitReason.trim(),nextReviewAt:v.nextReviewAt || null});
-  persistWithDecision('新事实事件');showView('home');
+  const pendingSync=['financial','offer','career','energy','relationship'].includes(v.factType);
+  data.checkIns.push({id:uid(),type:'light',factType:v.factType,pendingSync,createdAt:new Date().toISOString(),newFact:v.newFact.trim(),waitReason:v.waitReason.trim(),nextReviewAt:v.nextReviewAt || null});
+  persistWithDecision('新事实事件',pendingSync ? '变化已记录；文字尚未同步到判断字段，请更新对应表单。':'变化已记录；自由文字不会自动改变规则判断，请核对结论。');showView('home');
 }
 function reviewPremises(v) {
   const ps=data.routeDecision.decisionPremises ?? [];
@@ -499,7 +526,7 @@ function saveMajor(form) {
   const override=v.manualOverride === 'true',o=data.offers.find(x=>x.id === v.offerId);
   if (['GUANGDONG_READY','SHANGHAI_BRIDGE_READY'].includes(v.routeState)) {
     if (!o || (v.routeState === 'GUANGDONG_READY' ? o.city === '上海':o.city !== '上海')) throw new Error('请选择与路线一致的机会。');
-    const assessed=o.city === '上海' ? qualifyShanghaiOffer(o,data):qualifyGuangdongOffer(o,data);
+    const assessed=o.city === '上海' ? qualifyShanghaiOffer(o,data,todayISO()):qualifyGuangdongOffer(o,data,todayISO());
     if (!assessed.qualified && !override) throw new Error('这份机会尚未达到参考条件；如仍决定选它，请记录覆盖理由。');
   }
   if (override && (!v.overrideReason.trim() || !v.overrideReviewAt || v.overrideReviewAt <= todayISO())) throw new Error('覆盖建议需明确理由和未来复查日。');
@@ -541,13 +568,13 @@ document.addEventListener('click',event=>{
   if (!action) return;
   const before=structuredClone(data);
   try {
-    if (action==='no-change') { data.checkIns.push({id:uid(),type:'light',noChange:true,createdAt:new Date().toISOString()}); persistWithDecision('轻检查：无重要变化'); return; }
+    if (action==='no-change') { data.checkIns.push({id:uid(),type:'light',noChange:true,createdAt:new Date().toISOString()}); persistWithDecision('轻检查：无重要变化','已记录本次检查；既有事实与判断依据未改变。'); return; }
     if (action==='review-premises') { reviewPremises(getForm(target.closest('form')));persistWithDecision('前提复查');return; }
     if (action==='export-backup') { if (!confirm('明文备份包含你的负债、收入、关系和决策记录。确定关闭导出加密吗？')) return; notice(`备份已下载：${downloadBackup(data)}`); return; }
     if (action==='export-calendar') { downloadCalendar(data); notice('日历文件已下载，请导入你的日历应用'); return; }
     if (action==='clear-data') {
       if (!confirm('此操作会删除当前浏览器的全部路线记录。建议先导出备份。确认删除吗？')) return;
-      clearData(); data=createInitialData(); dataError=null; editingOfferId=null; render(); notice('本机数据已清空'); return;
+      clearData(data,{recovery:Boolean(dataError)}); data=loadData(); dataError=null; editingOfferId=null; render(); notice('本机数据已清空'); return;
     }
     if (action==='edit-offer') { editingOfferId=target.dataset.id; showView('offers'); document.querySelector('#offer-form')?.scrollIntoView({behavior:'smooth'}); return; }
     if (action==='cancel-edit') { editingOfferId=null; render(); return; }
@@ -584,7 +611,16 @@ document.addEventListener('change',async event=>{
     if (file.size > 10000000) throw new Error('备份超过 10 MB 限制。');
     const raw=await decodeBackup(await file.text(),document.querySelector('#import-password')?.value ?? '');
     if (!dataError && !confirm('导入会替换当前浏览器里的全部记录。已导出当前备份吗？确认继续？')) return;
-    data=importData(raw);document.querySelector('#import-password')?.setAttribute('value','');dataError=null;editingOfferId=null;render();notice('备份导入成功');
+    const previous={data,dataError,editingOfferId};
+    try {
+      data=validateData(JSON.parse(raw));dataError=null;editingOfferId=null;
+      render(); // First prove that this backup can be displayed without replacing the stored archive.
+      data=importData(raw,previous.data,{recovery:Boolean(previous.dataError)});
+      render();notice('备份导入成功');
+    } catch (error) {
+      data=previous.data;dataError=previous.dataError;editingOfferId=previous.editingOfferId;
+      render();throw error;
+    }
   } catch (error) { notice(`导入失败：${error.message}`); }
   finally { event.target.value=''; }
 });

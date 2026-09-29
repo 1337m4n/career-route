@@ -18,6 +18,7 @@ CHECKPOINTS.forEach(item => { item.type = MAJOR.has(item.id) ? 'major' : 'light'
 export function createInitialData() {
   return {
     schemaVersion: 2,
+    storageRevision: 0,
     profile: {
       startDate: "2026-09-26",
       targetRegion: "广东",
@@ -89,6 +90,10 @@ const isScore = value => value === null || (typeof value === 'number' && Number.
 const isFacts = value => isObject(value) && Object.values(value).every(item => item === null || typeof item === 'boolean');
 const CERTAINTIES = new Set(['confirmed', 'likely', 'rough', 'unknown']);
 const ROUTES = new Set(['BASELINE_SETUP','MARKET_TESTING','HOLD_AND_SEARCH','GUANGDONG_READY','SHANGHAI_BRIDGE_READY','ROUTE_CHOICE_REQUIRED','NOTICE_AND_HANDOVER','SHANGHAI_BRIDGE_ACTIVE','GUANGDONG_MIGRATION','GUANGDONG_SETTLING','STABLE']);
+const isDateTime = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value) && isDate(value.slice(0, 10)) && Number.isFinite(Date.parse(value));
+const isOptionalDate = value => value == null || isDate(value);
+const isOptionalDateTime = value => value == null || isDate(value) || isDateTime(value);
+const isIssue = value => typeof value === 'string' || (isObject(value) && typeof value.text === 'string');
 
 export function isDate(value) {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
@@ -98,6 +103,7 @@ export function isDate(value) {
 
 export function validateData(data) {
   if (!isObject(data) || ![1, 2].includes(data.schemaVersion)) throw new Error('备份版本不受支持。需要版本 1 或 2 的 JSON 数据。');
+  if (data.storageRevision != null && (!Number.isSafeInteger(data.storageRevision) || data.storageRevision < 0)) throw new Error('备份的存储版本无效。');
   for (const key of ["profile", "config", "baseline", "partnerPlan", "routeDecision"]) {
     if (!isObject(data[key])) throw new Error(`备份缺少有效的 ${key}。`);
   }
@@ -136,6 +142,16 @@ export function validateData(data) {
     if (value != null && !isDate(value)) throw new Error(`备份的 ${key} 日期无效。`);
   }
   if (!Array.isArray(data.routeDecision.reasons)) throw new Error("备份的决策依据无效。");
+  for (const key of ['decidedAt','startedAt','movedAt']) if (!isOptionalDate(data.routeDecision[key])) throw new Error(`备份的 ${key} 日期无效。`);
+  for (const checkIn of data.checkIns) {
+    if (!isOptionalDateTime(checkIn.createdAt) || !isOptionalDateTime(checkIn.syncedAt) || !isOptionalDate(checkIn.searchActionAt) || !isOptionalDate(checkIn.pauseReviewAt) || !isOptionalDate(checkIn.nextReviewAt)) throw new Error('备份的检查记录日期无效。');
+    if (checkIn.type === 'market' && checkIn.searchPauseReason && checkIn.createdAt == null) throw new Error('市场暂停记录缺少日期。');
+    for (const key of ['waitReason','pauseNote']) if (checkIn[key] != null && typeof checkIn[key] !== 'string') throw new Error('备份的检查记录文字无效。');
+    if (checkIn.pendingSync != null && typeof checkIn.pendingSync !== 'boolean') throw new Error('备份的待同步标记无效。');
+  }
+  for (const entry of data.decisionHistory) {
+    if (!isOptionalDateTime(entry.at) || ['reasons','warnings','blockers'].some(key => entry[key] != null && (!Array.isArray(entry[key]) || !entry[key].every(isIssue)))) throw new Error('备份的判断历史无效。');
+  }
   for (const offer of data.offers) {
     if ("status" in offer && !["none", "verbal", "written", "accepted"].includes(offer.status)) {
       throw new Error("备份的 Offer 状态无效。");
@@ -163,17 +179,18 @@ export function validateData(data) {
   }
   if (data.schemaVersion === 2) {
     for (const key of ['facts', 'decisions']) if (!Array.isArray(data[key]) || !data[key].every(isObject)) throw new Error(`备份的 ${key} 无效。`);
-    for (const fact of data.facts) if (!CERTAINTIES.has(fact.certainty) || typeof fact.value !== 'string') throw new Error('备份的新事实或确定程度无效。');
+    for (const fact of data.facts) if (!CERTAINTIES.has(fact.certainty) || typeof fact.value !== 'string' || !isOptionalDateTime(fact.recordedAt)) throw new Error('备份的新事实、日期或确定程度无效。');
     for (const item of [data.routeDecision, ...data.decisions]) {
-      if (!Array.isArray(item.decisionPremises) || item.decisionPremises.some(p => !isObject(p) || typeof p.text !== 'string' || !['valid','partially_valid','invalid','unknown'].includes(p.status))) throw new Error('备份的决策前提无效。');
+      if (!Array.isArray(item.decisionPremises) || item.decisionPremises.some(p => !isObject(p) || typeof p.text !== 'string' || !['valid','partially_valid','invalid','unknown'].includes(p.status) || !isOptionalDate(p.reviewedAt))) throw new Error('备份的决策前提无效。');
       if (item.manualOverride != null && (!isObject(item.manualOverride) || typeof item.manualOverride.reason !== 'string' || !item.manualOverride.reason.trim() || !isDate(item.manualOverride.nextReviewAt))) throw new Error('备份的覆盖理由或复查日期无效。');
     }
+    for (const item of data.decisions) if (!isOptionalDate(item.decidedAt) || !isOptionalDate(item.nextMajorReviewAt)) throw new Error('备份的正式决策日期无效。');
   }
   const defaults = createInitialData();
   const priorState = data.currentState;
   // Preserve the v1 archive; never invent retrospective premises or discard user amounts.
   const migratedState = priorState === 'DRIFT_REVIEW' ? (data.routeDecision.route === 'shanghai_bridge' && data.routeDecision.startedAt ? 'SHANGHAI_BRIDGE_ACTIVE' : 'HOLD_AND_SEARCH') : priorState;
-  const result = { ...defaults, ...data, schemaVersion: 2,
+  const result = { ...defaults, ...data, schemaVersion: 2, storageRevision: data.storageRevision ?? 0,
     routeState: data.routeState ?? migratedState ?? defaults.routeState,
     riskState: data.riskState ?? (priorState === 'DRIFT_REVIEW' ? 'YELLOW' : 'GREEN'),
     baseline: { ...defaults.baseline, ...data.baseline },
@@ -182,27 +199,64 @@ export function validateData(data) {
     config: { ...defaults.config, ...data.config, checkpointOverrides } };
   delete result.currentState;
   if (!ROUTES.has(result.routeState)) throw new Error('备份的路线状态无效。');
+  if (!Array.isArray(result.routeDecision.decisionPremises) || result.routeDecision.decisionPremises.some(p => !isObject(p) || typeof p.text !== 'string' || !['valid','partially_valid','invalid','unknown'].includes(p.status) || !isOptionalDate(p.reviewedAt))) throw new Error('备份的决策前提无效。');
   return result;
 }
 
 export function loadData() {
   const saved = localStorage.getItem(STORAGE_KEY);
-  return saved === null ? createInitialData() : validateData(JSON.parse(saved));
+  if (saved === null) return createInitialData();
+  const stored = JSON.parse(saved);
+  const cleared = clearedRevision(stored);
+  return cleared === null ? validateData(stored) : { ...createInitialData(), storageRevision: cleared };
 }
 
-export function saveData(data) {
+function clearedRevision(stored) {
+  if (!isObject(stored) || stored.cleared !== true) return null;
+  if (!Number.isSafeInteger(stored.storageRevision) || stored.storageRevision < 0) throw new Error('本机清空记录的版本无效。');
+  return stored.storageRevision;
+}
+
+function storedRevision(recovery = false) {
+  const saved = localStorage.getItem(STORAGE_KEY);
+  if (saved === null) return 0;
+  try {
+    const stored = JSON.parse(saved);
+    return clearedRevision(stored) ?? validateData(stored).storageRevision;
+  }
+  catch (error) { if (!recovery) throw error; return 0; }
+}
+
+function expectedRevision(data, recovery) {
+  if (recovery) return null;
+  if (!isObject(data) || !Number.isSafeInteger(data.storageRevision) || data.storageRevision < 0) throw new Error('当前页面缺少有效的存储版本，不能覆盖旧记录。请刷新后重试。');
+  return data.storageRevision;
+}
+
+function writeData(data, expected, recovery = false) {
   const valid = validateData(data);
+  // ponytail: This catches stale tabs, not simultaneous compare-and-write races; use Web Locks if collisions appear.
+  const revision = storedRevision(recovery);
+  if (expected !== null && expected !== revision) throw new Error('本机记录已在另一标签页更新。请先保留本页未保存内容，刷新后再填写；旧页面不会覆盖新记录。');
+  valid.storageRevision = revision + 1;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(valid));
+  data.storageRevision = valid.storageRevision;
   return valid;
 }
 
-export function clearData() {
-  localStorage.removeItem(STORAGE_KEY);
+export function saveData(data) { return writeData(data, expectedRevision(data, false)); }
+
+export function clearData(currentData, { recovery = false } = {}) {
+  const expected = expectedRevision(currentData, recovery);
+  const revision = storedRevision(recovery);
+  if (expected !== null && expected !== revision) throw new Error('本机记录已在另一标签页更新。请刷新后再决定是否清空。');
+  // Keep only a non-sensitive revision marker so an old tab cannot resurrect cleared personal data.
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({ cleared: true, storageRevision: revision + 1 }));
 }
 
-export function importData(jsonText) {
+export function importData(jsonText, currentData, { recovery = false } = {}) {
   const data = validateData(JSON.parse(jsonText));
-  return saveData(data);
+  return writeData(data, expectedRevision(currentData, recovery), recovery);
 }
 
 export function download(text, filename, type) {
