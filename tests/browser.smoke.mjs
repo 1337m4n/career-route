@@ -45,7 +45,7 @@ try {
   assert.match(await questions.nth(4).innerText(),/资料不足，不能判定是否偏离原计划/);
   assert.equal(await page.locator('.route-meter').count(),0);
   assert.equal(await page.locator('#app [data-view="feedback"]').count(),1);
-  await navigate('feedback');assert.equal(await page.locator('#app form').count(),1);await tab('baseline');
+  await navigate('feedback');await page.locator('#baseline-form').waitFor();assert.equal(await page.locator('#app form').count(),1);await tab('baseline');
   for (const [key,value] of Object.entries({debtBalance:90000,cashBalance:25000,monthlyNetIncome:10000,monthlyDebtPayment:5000,monthlyLivingCost:4000,targetRoles:'安全工程',contractNoticeDays:30})) await fill('baseline-form',key,value);
   for (const key of ['technologyDepth','responsibility','transferability','targetFit','outcomes']) await select('baseline-form','career_'+key,'true');
   await submit('baseline-form');await page.getByRole('heading',{name:'今天的判断'}).waitFor();
