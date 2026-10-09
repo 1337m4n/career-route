@@ -42,7 +42,7 @@ test('五问路线倾向只基于已录入机会；百分比和证据置信度�
   const [first]=routeTendencies(d);
   assert.equal(first.route,'直接广东');assert.equal(first.score,95);assert.equal(first.confidence,100);assert.equal(first.checked,7);assert.equal(first.qualified,true);
   d.offers.push(sh);
-  const both=routeTendencies(d);assert.deepEqual(both.map(x=>x.route),['直接广东','上海桥接']);
+  const both=routeTendencies(d);assert.deepEqual(both.map(x=>x.route),['直接广东','上海过渡']);
   assert.ok(both.every(x=>x.score>=0 && x.score<=100 && x.confidence===100));
   gd.status='verbal';
   const partial=routeTendencies(d).find(x=>x.route==='直接广东');
@@ -112,7 +112,7 @@ test('核心财务未知与新事实待同步不能显示无警告绿色 READY �
   d.baseline.debtBalance=90000;
   d=recordRouteDecision(d,{id:'chosen',routeState:'GUANGDONG_READY',offerId:o.id,decisionPremises:[{text:'职业成长',status:'valid'},{text:'现金可承受',status:'valid'}],nextMajorReviewAt:'2027-03-01'});
   d.checkIns.push({type:'light',createdAt:'2026-12-01T00:00:00Z',waitReason:'还想再等等',pendingSync:true});
-  const result=evaluate(d,'2026-12-01');assert.equal(result.riskState,'YELLOW');assert.ok(result.warnings.some(w=>w.code==='U04'));assert.match(result.actions[0].text,/同步/);
+  const result=evaluate(d,'2026-12-01');assert.equal(result.riskState,'YELLOW');assert.ok(result.warnings.some(w=>w.code==='U04'));assert.match(result.actions[0].text,/填写变化/);
   Object.assign(o,{status:'accepted',termsConfirmed:true,pendingConditionsClear:true,transitionIncomeGapMonths:0});
   assert.ok(resignBlockers(o,d,'2026-12-01').some(b=>b.code==='U04'));
   d.checkIns.push({type:'light',createdAt:'2026-12-02T00:00:00Z',waitReason:'先拿奖金'});

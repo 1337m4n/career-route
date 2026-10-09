@@ -1,16 +1,16 @@
 export const STORAGE_KEY = "career-route:v1";
 
 export const CHECKPOINTS = [
-  { id: "baseline", date: "2026-10-10", label: "完成初始基线", description: "补齐现金、负债、目标岗位和关系时间线。" },
-  { id: "market_midpoint", date: "2026-11-15", label: "市场验证中期校准", description: "检查投递、面试和目标岗位是否需要调整。" },
-  { id: "market_pricing", date: "2026-11-30", label: "市场定价", description: "汇总两地真实岗位、薪资和成长反馈。" },
-  { id: "december_decision", date: "2026-12-15", label: "第一次路线决策", description: "比较广东、上海桥接与继续求职。" },
+  { id: "baseline", date: "2026-10-10", label: "完成初始基本资料", description: "补齐现金、负债、目标岗位和关系重要日期。" },
+  { id: "market_midpoint", date: "2026-11-15", label: "看看投简历和面试的进展", description: "检查投递、面试和目标岗位是否需要调整。" },
+  { id: "market_pricing", date: "2026-11-30", label: "看看真实岗位和工资", description: "汇总两地真实岗位、薪资和成长反馈。" },
+  { id: "december_decision", date: "2026-12-15", label: "第一次决定去广东还是留上海", description: "比较广东、上海过渡与继续求职。" },
   { id: "year_end", date: "2026-12-31", label: "年末检查", description: "检查是否因为奖金或习惯暂停行动。" },
-  { id: "january_cashflow", date: "2027-01-15", label: "现金流与关系复盘", description: "更新月供变化和双方迁移窗口。" },
-  { id: "march_review", date: "2027-03-01", label: "第二次路线复盘", description: "用最新 Offer、现金流和精力状态重选路线。" },
-  { id: "bridge_search", date: "2027-04-15", label: "桥接求职预警", description: "若已桥接上海，确认广东求职已经重启。" },
-  { id: "bridge_exit_warning", date: "2027-05-15", label: "桥接退出预警", description: "检查岗位管道和退出准备。" },
-  { id: "bridge_review", date: "2027-06-01", label: "桥接硬复盘", description: "重新比较未来收益和成本，不自动续期。" },
+  { id: "january_cashflow", date: "2027-01-15", label: "看看收入、负债和女朋友的安排", description: "更新月供变化和双方搬家窗口。" },
+  { id: "march_review", date: "2027-03-01", label: "再次决定去广东还是留上海", description: "用最新 录用通知、收入开支和工作感受重选去向。" },
+  { id: "bridge_search", date: "2027-04-15", label: "开始投广东岗位", description: "如果先在上海工作，现在开始投广东岗位。" },
+  { id: "bridge_exit_warning", date: "2027-05-15", label: "看看广东岗位有没有进展", description: "看看简历、面试和搬家准备的进度。" },
+  { id: "bridge_review", date: "2027-06-01", label: "决定是否继续留上海", description: "重新比较未来收益和成本，不自动续期。" },
 ];
 const MAJOR = new Set(['baseline', 'market_pricing', 'december_decision', 'march_review', 'bridge_review']);
 CHECKPOINTS.forEach(item => { item.type = MAJOR.has(item.id) ? 'major' : 'light'; });
@@ -115,8 +115,8 @@ export function validateData(data) {
       throw new Error(`备份的 ${key} 无效。`);
     }
   }
-  if (data.schemaVersion === 1 && typeof data.currentState !== 'string') throw new Error('备份的路线状态无效。');
-  if (data.schemaVersion === 2 && (!ROUTES.has(data.routeState) || !['GREEN','YELLOW','RED','BLOCKED'].includes(data.riskState))) throw new Error('备份的路线或风险状态无效。');
+  if (data.schemaVersion === 1 && typeof data.currentState !== 'string') throw new Error('备份的去向状态无效。');
+  if (data.schemaVersion === 2 && (!ROUTES.has(data.routeState) || !['GREEN','YELLOW','RED','BLOCKED'].includes(data.riskState))) throw new Error('备份的去向或风险状态无效。');
   for (const key of ["debtBalance", "cashBalance", "monthlyNetIncome", "monthlyDebtPayment", "monthlyLivingCost", "oneOffCostsNext90Days"]) {
     if (key in data.baseline && !isMoney(data.baseline[key])) throw new Error(`备份的 ${key} 金额无效。`);
   }
@@ -128,14 +128,14 @@ export function validateData(data) {
   }
   for (const key of ['careerFacts','energyFacts']) if (key in data.baseline && !isFacts(data.baseline[key])) throw new Error('备份的职业或工作体验事实无效。');
   for (const key of ['contractNoticeDays','availableHandoverDays','preferredHandoverDays']) if (data.baseline[key] != null && (!Number.isInteger(data.baseline[key]) || data.baseline[key] < 0)) throw new Error('备份的通知或交接天数无效。');
-  if (data.config.bridgeMaxMonths != null && (!Number.isInteger(data.config.bridgeMaxMonths) || data.config.bridgeMaxMonths < 1 || data.config.bridgeMaxMonths > 6)) throw new Error('桥接复盘上限必须为 1–6 个月。');
+  if (data.config.bridgeMaxMonths != null && (!Number.isInteger(data.config.bridgeMaxMonths) || data.config.bridgeMaxMonths < 1 || data.config.bridgeMaxMonths > 6)) throw new Error('过渡再看一次计划上限必须为 1–6 个月。');
   if (data.config.driftNoActionDays != null && (!Number.isInteger(data.config.driftNoActionDays) || data.config.driftNoActionDays < 1)) throw new Error('无行动检查周期必须为正整数天。');
-  if (data.config.planVarianceWarningRate != null && data.config.planVarianceWarningRate > 1) throw new Error('财务偏差比例必须在 0–1 之间。');
+  if (data.config.planVarianceWarningRate != null && data.config.planVarianceWarningRate > 1) throw new Error('实际金额和计划金额的差距比例必须在 0–1 之间。');
   if (!isScore(data.config.gdMinCareerScore) || data.config.gdMinCareerScore === null) {
     throw new Error("备份的广东职业成长门槛无效。");
   }
   if (data.partnerPlan.sharedDestinationAligned != null && typeof data.partnerPlan.sharedDestinationAligned !== "boolean") {
-    throw new Error("备份的共同方向无效。");
+    throw new Error("备份的你和女朋友想去的地方无效。");
   }
   for (const key of ["earliestMoveDate", "latestMoveDate", "reunionDate", "nextRelationshipReviewAt", "longDistanceStartDate"]) {
     const value = data.partnerPlan[key];
@@ -147,14 +147,14 @@ export function validateData(data) {
     if (!isOptionalDateTime(checkIn.createdAt) || !isOptionalDateTime(checkIn.syncedAt) || !isOptionalDate(checkIn.searchActionAt) || !isOptionalDate(checkIn.pauseReviewAt) || !isOptionalDate(checkIn.nextReviewAt)) throw new Error('备份的检查记录日期无效。');
     if (checkIn.type === 'market' && checkIn.searchPauseReason && checkIn.createdAt == null) throw new Error('市场暂停记录缺少日期。');
     for (const key of ['waitReason','pauseNote']) if (checkIn[key] != null && typeof checkIn[key] !== 'string') throw new Error('备份的检查记录文字无效。');
-    if (checkIn.pendingSync != null && typeof checkIn.pendingSync !== 'boolean') throw new Error('备份的待同步标记无效。');
+    if (checkIn.pendingSync != null && typeof checkIn.pendingSync !== 'boolean') throw new Error('备份的还需更新标记无效。');
   }
   for (const entry of data.decisionHistory) {
     if (!isOptionalDateTime(entry.at) || ['reasons','warnings','blockers'].some(key => entry[key] != null && (!Array.isArray(entry[key]) || !entry[key].every(isIssue)))) throw new Error('备份的判断历史无效。');
   }
   for (const offer of data.offers) {
     if ("status" in offer && !["none", "verbal", "written", "accepted"].includes(offer.status)) {
-      throw new Error("备份的 Offer 状态无效。");
+      throw new Error("备份的 招聘进展无效。");
     }
     for (const key of ['grossIncome','monthlyNetIncome','monthlyLivingCost','relocationCost','switchingCost','probationNetIncome','probationMonths','transitionIncomeGapMonths']) {
       if (key in offer && !isMoney(offer[key])) throw new Error(`备份的 Offer ${key} 无效。`);
@@ -163,7 +163,7 @@ export function validateData(data) {
     for (const key of ['targetAligned','termsConfirmed','pendingConditionsClear','noticeAgreementConfirmed','canDelayStart']) if (offer[key] != null && typeof offer[key] !== 'boolean') throw new Error('备份的 Offer 确认事实无效。');
     if ("careerScore" in offer && !isScore(offer.careerScore)) throw new Error("备份的 Offer 成长评分无效。");
     for (const key of ['startDate','responseDueDate','bridgeExitDate','gdSearchRestartDate']) if (offer[key] != null && offer[key] !== '' && !isDate(offer[key])) throw new Error(`备份的 Offer ${key} 日期无效。`);
-    if ('careerFacts' in offer && !isFacts(offer.careerFacts)) throw new Error('备份的职业事实无效。');
+    if ('careerFacts' in offer && !isFacts(offer.careerFacts)) throw new Error('备份的工作成长情况无效。');
     if ("sixMonthNetGain" in offer && offer.sixMonthNetGain !== null && !Number.isFinite(offer.sixMonthNetGain)) {
       throw new Error("备份的 Offer 六个月净改善无效。");
     }
@@ -179,10 +179,10 @@ export function validateData(data) {
   }
   if (data.schemaVersion === 2) {
     for (const key of ['facts', 'decisions']) if (!Array.isArray(data[key]) || !data[key].every(isObject)) throw new Error(`备份的 ${key} 无效。`);
-    for (const fact of data.facts) if (!CERTAINTIES.has(fact.certainty) || typeof fact.value !== 'string' || !isOptionalDateTime(fact.recordedAt)) throw new Error('备份的新事实、日期或确定程度无效。');
+    for (const fact of data.facts) if (!CERTAINTIES.has(fact.certainty) || typeof fact.value !== 'string' || !isOptionalDateTime(fact.recordedAt)) throw new Error('备份的新事实、日期或有多确定？无效。');
     for (const item of [data.routeDecision, ...data.decisions]) {
-      if (!Array.isArray(item.decisionPremises) || item.decisionPremises.some(p => !isObject(p) || typeof p.text !== 'string' || !['valid','partially_valid','invalid','unknown'].includes(p.status) || !isOptionalDate(p.reviewedAt))) throw new Error('备份的决策前提无效。');
-      if (item.manualOverride != null && (!isObject(item.manualOverride) || typeof item.manualOverride.reason !== 'string' || !item.manualOverride.reason.trim() || !isDate(item.manualOverride.nextReviewAt))) throw new Error('备份的覆盖理由或复查日期无效。');
+      if (!Array.isArray(item.decisionPremises) || item.decisionPremises.some(p => !isObject(p) || typeof p.text !== 'string' || !['valid','partially_valid','invalid','unknown'].includes(p.status) || !isOptionalDate(p.reviewedAt))) throw new Error('备份的决策条件无效。');
+      if (item.manualOverride != null && (!isObject(item.manualOverride) || typeof item.manualOverride.reason !== 'string' || !item.manualOverride.reason.trim() || !isDate(item.manualOverride.nextReviewAt))) throw new Error('备份的这样选择的理由或复查日期无效。');
     }
     for (const item of data.decisions) if (!isOptionalDate(item.decidedAt) || !isOptionalDate(item.nextMajorReviewAt)) throw new Error('备份的正式决策日期无效。');
   }
@@ -198,8 +198,8 @@ export function validateData(data) {
     routeDecision: { ...defaults.routeDecision, ...data.routeDecision },
     config: { ...defaults.config, ...data.config, checkpointOverrides } };
   delete result.currentState;
-  if (!ROUTES.has(result.routeState)) throw new Error('备份的路线状态无效。');
-  if (!Array.isArray(result.routeDecision.decisionPremises) || result.routeDecision.decisionPremises.some(p => !isObject(p) || typeof p.text !== 'string' || !['valid','partially_valid','invalid','unknown'].includes(p.status) || !isOptionalDate(p.reviewedAt))) throw new Error('备份的决策前提无效。');
+  if (!ROUTES.has(result.routeState)) throw new Error('备份的去向状态无效。');
+  if (!Array.isArray(result.routeDecision.decisionPremises) || result.routeDecision.decisionPremises.some(p => !isObject(p) || typeof p.text !== 'string' || !['valid','partially_valid','invalid','unknown'].includes(p.status) || !isOptionalDate(p.reviewedAt))) throw new Error('备份的决策条件无效。');
   return result;
 }
 
@@ -279,7 +279,7 @@ export function downloadBackup(data) {
 
 export function appendDecision(data, decision) {
   const valid = validateData(data);
-  if (!isObject(decision)) throw new Error("决策记录无效。");
+  if (!isObject(decision)) throw new Error("我的记录无效。");
   return {
     ...valid,
     decisionHistory: [...valid.decisionHistory, {
@@ -291,7 +291,7 @@ export function appendDecision(data, decision) {
 }
 
 export function recordRouteDecision(data, item) {
-  if (!ROUTES.has(item.routeState) || !Array.isArray(item.decisionPremises) || item.decisionPremises.length < 2 || item.decisionPremises.length > 5 || !isDate(item.nextMajorReviewAt)) throw new Error('请选择路线、填写 2–5 条前提和下次复盘日。');
+  if (!ROUTES.has(item.routeState) || !Array.isArray(item.decisionPremises) || item.decisionPremises.length < 2 || item.decisionPremises.length > 5 || !isDate(item.nextMajorReviewAt)) throw new Error('请选择去向、填写 2–5 条条件和下次再看一次计划的日期。');
   const snapshot = { ...structuredClone(item), facts: structuredClone(data.facts), unknowns: structuredClone(item.unknowns ?? []), recordedBaseline: structuredClone(data.baseline), recordedPartnerPlan: structuredClone(data.partnerPlan), recordedOffers: structuredClone(data.offers) };
   return { ...data, routeState: item.routeState, currentDecisionId: item.id,
     decisions: [...data.decisions, snapshot], routeDecision: { ...data.routeDecision, ...item } };

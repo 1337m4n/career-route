@@ -6,7 +6,7 @@ function nextDay(date) {
   return new Date(Date.parse(`${date}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
 }
 
-function event(id, date, label, stamp, description = '检查上次选择这条路线的前提现在是否仍成立。不是强制离职日。') {
+function event(id, date, label, stamp, description = '检查上次选择这条去向的条件现在是否仍成立。不是强制离职日。') {
   if (!isDate(date)) throw new Error(`提醒日期无效：${id}`);
   return [
     "BEGIN:VEVENT",
@@ -14,12 +14,12 @@ function event(id, date, label, stamp, description = '检查上次选择这条�
     `DTSTAMP:${stamp}`,
     `DTSTART;VALUE=DATE:${date.replace(/-/g, "")}`,
     `DTEND;VALUE=DATE:${nextDay(date).replace(/-/g, "")}`,
-    `SUMMARY:${escapeText(`职业路线：${label}`)}`,
+    `SUMMARY:${escapeText(`职业去向：${label}`)}`,
     `DESCRIPTION:${escapeText(description)}`,
     'BEGIN:VALARM',
     'ACTION:DISPLAY',
     'TRIGGER:-P1D',
-    'DESCRIPTION:检查决策前提是否仍成立',
+    'DESCRIPTION:检查决策条件是否仍成立',
     'END:VALARM',
     "END:VEVENT",
   ];
@@ -35,15 +35,15 @@ export function makeCalendar(data) {
     "CALSCALE:GREGORIAN",
     "X-WR-TIMEZONE:Asia/Shanghai",
   ];
-  for (const item of CHECKPOINTS) lines.push(...event(item.id, overrides[item.id] ?? item.date, `${item.type === 'major' ? '重大复盘' : '轻检查'}：${item.label}`, stamp));
+  for (const item of CHECKPOINTS) lines.push(...event(item.id, overrides[item.id] ?? item.date, `${item.type === 'major' ? '重新考虑去向' : '记录近况'}：${item.label}`, stamp));
   const route = data?.routeDecision ?? {};
-  if (route.gdSearchRestartDate) lines.push(...event("gd-search-restart", route.gdSearchRestartDate, "重启广东求职", stamp));
-  if (route.bridgeExitDate) lines.push(...event("bridge-exit", route.bridgeExitDate, "上海桥接到期复盘", stamp));
-  if (route.nextMajorReviewAt) lines.push(...event('next-major-review',route.nextMajorReviewAt,'复查决策前提',stamp));
+  if (route.gdSearchRestartDate) lines.push(...event("gd-search-restart", route.gdSearchRestartDate, "重新投广东岗位", stamp));
+  if (route.bridgeExitDate) lines.push(...event("bridge-exit", route.bridgeExitDate, "上海过渡到期再看一次计划", stamp));
+  if (route.nextMajorReviewAt) lines.push(...event('next-major-review',route.nextMajorReviewAt,'复查决策条件',stamp));
   if (route.manualOverride?.nextReviewAt) lines.push(...event('override-review',route.manualOverride.nextReviewAt,'复查临时例外理由',stamp));
   if (data.partnerPlan?.nextRelationshipReviewAt) lines.push(...event('relationship-review',data.partnerPlan.nextRelationshipReviewAt,'共同讨论下一阶段',stamp));
   for (const [index,offer] of (data.offers ?? []).entries()) if (offer.responseDueDate) {
-    lines.push(...event('offer-response-'+index,offer.responseDueDate,'Offer 答复截止',stamp,'核实机会条款和答复期限；不是离职日。'));
+    lines.push(...event('offer-response-'+index,offer.responseDueDate,'录用通知最晚答复日',stamp,'核实机会条款和答复期限；不是离职日。'));
   }
   for (const [index,item] of (data.checkIns ?? []).entries()) {
     const date=item.nextReviewAt ?? item.pauseReviewAt;
