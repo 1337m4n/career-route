@@ -544,6 +544,7 @@ function render() {
 function getForm(form) { return Object.fromEntries(new FormData(form)); }
 function saveBaseline(form) {
   const v=getForm(form),facts=careerValues(v);
+  if(!isDate(v.financeAsOfDate)||v.financeAsOfDate>todayISO())throw new Error('财务数字的实际日期不能晚于今天。');
   Object.assign(data.baseline,Object.fromEntries(['debtBalance','cashBalance','monthlyNetIncome','monthlyDebtPayment','monthlyLivingCost','contractNoticeDays','bonusAmount'].map(key=>[key,num(v[key])])),{oneOffCostsNext90Days:num(v.oneOffCostsNext90Days) ?? 0,careerFacts:facts,currentRoleGrowth:deriveCareer(facts).score,careerEvidence:v.careerEvidence.trim(),certainty:v.financeCertainty,financeAsOfDate:v.financeAsOfDate,financeUpdatedAt:new Date().toISOString(),energyFacts:Object.fromEntries(['workAvoidance','lowMood','restRecovers','affectsLife','expensiveRecovery'].map(key=>[key,bool(v['energy_'+key])])),bonusPayDate:v.bonusPayDate || null});
   data.config.gdMinNetIncome=num(v.gdMinNetIncome);
   data.partnerPlan.sharedDestinationAligned=bool(v.sharedDestinationAligned);
@@ -563,6 +564,7 @@ function saveMarket(form) {
 
 function saveFinance(form) {
   const v = getForm(form);
+  if(!isDate(v.financeAsOfDate)||v.financeAsOfDate>todayISO())throw new Error('财务数字的实际日期不能晚于今天。');
   const entry = { id:uid(), type:'finance', createdAt:new Date().toISOString(),
     financeAsOfDate:v.financeAsOfDate,certainty:v.financeCertainty,
     debtBalance:num(v.debtBalance),cashBalance:num(v.cashBalance),monthlyNetIncome:num(v.monthlyNetIncome),
