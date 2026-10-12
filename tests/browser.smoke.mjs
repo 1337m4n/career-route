@@ -61,11 +61,11 @@ try {
   await select('cash-event-form','kind','insurance');
   await fill('cash-event-form','label','合成测试保险');
   await fill('cash-event-form','date',future(5));
-  await fill('cash-event-form','amount','5700');
+  await fill('cash-event-form','amount','4300');
   await select('cash-event-form','certainty','confirmed');
   await submit('cash-event-form');
   assert.equal((await stored()).cashEvents.length,1);
-  assert.equal((await stored()).cashEvents[0].amount,5700);
+  assert.equal((await stored()).cashEvents[0].amount,4300);
   await navigate('cashflow');
   await select('cash-event-form','kind','bonus');
   await fill('cash-event-form','label','尚未确认的奖金');
