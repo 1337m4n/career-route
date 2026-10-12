@@ -217,6 +217,7 @@ export function validateData(data) {
     for (const key of ['targetAligned','termsConfirmed','pendingConditionsClear','noticeAgreementConfirmed','canDelayStart']) if (offer[key] != null && typeof offer[key] !== 'boolean') throw new Error('备份的 Offer 确认事实无效。');
     if ("careerScore" in offer && !isScore(offer.careerScore)) throw new Error("备份的 Offer 成长评分无效。");
     for (const key of ['startDate','responseDueDate','bridgeExitDate','gdSearchRestartDate','firstPayDate']) if (offer[key] != null && offer[key] !== '' && !isDate(offer[key])) throw new Error(`备份的 Offer ${key} 日期无效。`);
+    if (offer.updatedAt != null && !isDateTime(offer.updatedAt)) throw new Error('备份的岗位更新时间无效。');
     if ('careerFacts' in offer && !isFacts(offer.careerFacts)) throw new Error('备份的工作成长情况无效。');
     if ("sixMonthNetGain" in offer && offer.sixMonthNetGain !== null && !Number.isFinite(offer.sixMonthNetGain)) {
       throw new Error("备份的 Offer 六个月净改善无效。");
