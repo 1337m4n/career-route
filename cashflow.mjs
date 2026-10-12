@@ -134,7 +134,7 @@ export function projectCashflow(data,today) {
   const daily=[];
   for(let i=1;i<=90;i++){
     const date=isoPlus(today,i);
-    const paused=isDate(gapFrom)&&date>=gapFrom&&(!isDate(gapUntil)||date<=gapUntil);
+    const paused=isDate(gapFrom)&&date>=gapFrom&&(!isDate(gapUntil)||date<gapUntil);
     const payOnThisDay=hasPayday&&date===nextMonthlyPayday(date,payday);
     const income=paused ? 0 : hasPayday ? (payOnThisDay?b.monthlyNetIncome:0):dailyIncome;
     cautious+=income-dailyCost;scenario+=income-dailyCost;
