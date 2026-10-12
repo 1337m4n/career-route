@@ -86,6 +86,12 @@ a { color: var(--teal); }
 .timeline-node.is-current { color: var(--teal-dark); }
 .timeline-node b { display: block; font-size: 15px; color: inherit; }
 .timeline-node span { display: block; }
+.timeline-node small { display: block; margin-top: 7px; font-size: 12px; line-height: 1.35; color: var(--muted); }
+.timeline-node.is-complete { color: var(--green); }
+.timeline-node.is-complete::before { content: "✓"; display: grid; place-items: center; background: var(--green); border-color: var(--green); color: #fff; font-size: 13px; font-weight: 800; }
+.timeline-node.is-complete small { color: var(--green); }
+.timeline-node.is-current:not(.is-complete) small { color: var(--teal-dark); }
+
 .split-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 35px; }
 .split-grid > * + * { border-left: 1px solid var(--line); padding-left: 35px; }
 .metric-list { margin: 0; }
@@ -163,6 +169,17 @@ a { color: var(--teal); }
 .full-timeline p { margin: 3px 0 0; color: var(--muted); }
 .full-timeline .past { color: #98a2aa; }
 .full-timeline .today { color: var(--amber); }
+.full-timeline li.is-complete time { color: var(--green); }
+.full-timeline .checkpoint-status { margin-top: 7px; font-size: 13px; font-weight: 650; }
+.full-timeline .checkpoint-status.complete { color: var(--green); }
+.full-timeline .checkpoint-status.past { color: var(--amber); }
+.full-timeline .checkpoint-status.future { color: var(--muted); }
+.checkpoint-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; justify-content: flex-end; max-width: 265px; }
+.checkpoint-controls label { width: 100%; color: var(--muted); font-size: 12px; text-align: right; }
+.checkpoint-controls input[type="date"] { width: 145px; max-width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 8px; background: #fff; color: var(--ink); font: inherit; font-size: 13px; }
+.checkpoint-controls .btn { padding: 8px 10px; font-size: 12px; }
+.checkpoint-controls .text-link { padding: 5px; font-size: 12px; }
+
 .history-list { border-top: 1px solid var(--line); }
 .history-entry { border-bottom: 1px solid var(--line); padding: 20px 0; display: grid; grid-template-columns: 152px 1fr; gap: 20px; }
 .history-entry time { font-size: 12px; color: var(--muted); }
@@ -242,7 +259,8 @@ summary { cursor: pointer; color: var(--teal-dark); }
   .form-grid .full { grid-column: 1 / -1; }
   .settings-grid > section { margin-bottom: 26px; }
   .full-timeline li { grid-template-columns: 100px 1fr; gap: 10px; }
-  .full-timeline li > span:last-child { grid-column: 2; }
+  .full-timeline .checkpoint-controls { grid-column: 2; justify-content: flex-start; max-width: 100%; }
+  .checkpoint-controls label { text-align: left; }
 }
 @media (max-width: 450px) {
   .main { padding: 24px 17px 60px; }
