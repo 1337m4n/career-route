@@ -138,6 +138,7 @@ export function projectCashflow(data,today) {
     if(e.direction==='out'||e.certainty==='confirmed')cautious+=change;
     scenario+=change;
   }
+  const startCautious=cautious,startScenario=scenario;
   cautiousLowest=Math.min(cautiousLowest,cautious);
   scenarioLowest=Math.min(scenarioLowest,scenario);
   if(cautious<0)firstDeficit=today;
@@ -161,8 +162,8 @@ export function projectCashflow(data,today) {
   }
   const periods=[30,60,90].map(days=>{
     const values=daily.slice(0,days);
-    const minC=Math.min(b.cashBalance,cautiousLowest,...values.map(x=>x.cautious));
-    const minS=Math.min(b.cashBalance,scenarioLowest,...values.map(x=>x.scenario));
+    const minC=Math.min(b.cashBalance,startCautious,...values.map(x=>x.cautious));
+    const minS=Math.min(b.cashBalance,startScenario,...values.map(x=>x.scenario));
     const last=values.at(-1);
     const firstShort=firstDeficit===today ? {date:today} : values.find(v=>v.cautious<0);
     return {days,date:last.date,cautiousEnd:last.cautious,scenarioEnd:last.scenario,
