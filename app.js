@@ -639,7 +639,7 @@ function saveCashEvent(form) {
   const existing=data.cashEvents.find(e=>e.id===v.id);
   const event={...existing,id:existing?.id ?? uid(),kind:v.kind,label:v.label.trim(),date:v.date,
     endDate:v.endDate||null,direction:v.direction,impact:v.impact,
-    amount:num(v.amount),recurrenceMonths:Number(v.recurrenceMonths??0),
+    amount:v.direction==='milestone' ? null : num(v.amount),recurrenceMonths:Number(v.recurrenceMonths??0),
     certainty:v.certainty,note:v.note.trim(),completedAt:existing?.completedAt??null};
   if(existing)Object.assign(existing,event);else data.cashEvents.push(event);
   validateData(data);
