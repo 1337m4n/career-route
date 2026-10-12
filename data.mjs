@@ -34,6 +34,7 @@ export function createInitialData() {
       driftNoActionDays: 14,
       planVarianceWarningRate: 0.1,
       checkpointOverrides: {},
+      checkpointCompletions: {},
     },
     routeState: "BASELINE_SETUP",
     riskState: "GREEN",
@@ -82,6 +83,22 @@ export function createInitialData() {
     reminders: [],
     decisionHistory: [],
   };
+}
+
+// A completed checkpoint is stored as its actual completion date, never inferred from a due date.
+export function checkpointCompletion(data, id) {
+  const entries = data?.config?.checkpointCompletions ?? {};
+  if (Object.prototype.hasOwnProperty.call(entries, id)) return entries[id];
+  if (id !== 'baseline') return null;
+  // Existing users have already saved their baseline. Recover its original date from
+  // the audit trail instead of silently marking it complete on today's date.
+  const historyDates = (data?.decisionHistory ?? [])
+    .filter(entry => entry.source === '基本资料' && typeof entry.at === 'string')
+    .map(entry => entry.at.slice(0, 10)).filter(isDate);
+  const factDates = (data?.facts ?? [])
+    .filter(entry => typeof entry.value === 'string' && entry.value.startsWith('更新首次基本资料') && typeof entry.recordedAt === 'string')
+    .map(entry => entry.recordedAt.slice(0, 10)).filter(isDate);
+  return [...historyDates, ...factDates].sort()[0] ?? null;
 }
 
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -173,6 +190,12 @@ export function validateData(data) {
       Object.values(checkpointOverrides).some(value => !isDate(value))) {
     throw new Error("备份的检查节点日期无效。");
   }
+  const checkpointCompletions = data.config.checkpointCompletions ?? {};
+  if (!isObject(checkpointCompletions) ||
+      Object.entries(checkpointCompletions).some(([id, value]) =>
+        !CHECKPOINTS.some(item => item.id === id) || (value !== null && !isDate(value)))) {
+    throw new Error("备份的时间节点完成记录无效。");
+  }
   for (const key of ["bridgeExitDate", "gdSearchRestartDate", "nextMajorReviewAt"]) {
     const value = data.routeDecision[key];
     if (value != null && !isDate(value)) throw new Error(`备份的 ${key} 日期无效。`);
@@ -196,7 +219,7 @@ export function validateData(data) {
     baseline: { ...defaults.baseline, ...data.baseline },
     partnerPlan: { ...defaults.partnerPlan, ...data.partnerPlan },
     routeDecision: { ...defaults.routeDecision, ...data.routeDecision },
-    config: { ...defaults.config, ...data.config, checkpointOverrides } };
+    config: { ...defaults.config, ...data.config, checkpointOverrides, checkpointCompletions } };
   delete result.currentState;
   if (!ROUTES.has(result.routeState)) throw new Error('备份的去向状态无效。');
   if (!Array.isArray(result.routeDecision.decisionPremises) || result.routeDecision.decisionPremises.some(p => !isObject(p) || typeof p.text !== 'string' || !['valid','partially_valid','invalid','unknown'].includes(p.status) || !isOptionalDate(p.reviewedAt))) throw new Error('备份的决策条件无效。');
