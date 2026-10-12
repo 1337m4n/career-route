@@ -134,6 +134,14 @@ function renderFiveQuestions(d) {
     '尚无近期已核对的完整财务基准';
   const estimatedFacts=[`月供＋生活费根据月度预算估算：${money(d.finance.required)}`];
   if(forecast.available)estimatedFacts.push(`未来30天谨慎最低现金估算：${money(forecast.periods[0].cautiousLowest)}`);
+  const maybeIncome=forecast.events.filter(e=>e.direction==='in'&&e.certainty!=='confirmed').slice(0,2);
+  if(maybeIncome.length)estimatedFacts.push(`尚未确认的预计收入：${maybeIncome.map(e=>e.label+' '+money(e.amount)).join('、')}（仅纳入情景）`);
+  const activeOffer=selected??data.offers.at(-1);
+  if(activeOffer){
+    if(['written','accepted'].includes(activeOffer.status) && activeOffer.certainty==='confirmed'){
+      certainFacts += `；已录入书面岗位信息：${activeOffer.company||'未命名岗位'}（${activeOffer.updatedAt ? dateLabel(activeOffer.updatedAt) : '核实日未记录'}）`;
+    }else estimatedFacts.push(`岗位机会：${activeOffer.company||'未命名岗位'}（${CASH_CERTAINTIES[activeOffer.certainty]||'未核实'}，不能当作录用）`);
+  }
   const waitingFacts=[
     ...(fresh.status!=='fresh' ? ['可用现金最近的实际日期与金额'] : []),
     ...(forecast.issues.length ? forecast.issues.slice(0,2) : []),
