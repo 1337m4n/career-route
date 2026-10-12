@@ -608,6 +608,32 @@ function saveOffer(form) {
   showView('offers');
 }
 
+
+function saveCashflowSettings(form) {
+  const v=getForm(form);
+  data.cashflowSettings={
+    salaryPayDay:num(v.salaryPayDay),
+    incomePauseStart:v.incomePauseStart || null,
+    incomePauseEnd:v.incomePauseEnd || null,
+  };
+  validateData(data); // Catch invalid gaps before any write.
+  persistWithDecision('资金模型设置','工资到账日和收入空档已更新。');
+  showView('cashflow');
+}
+function saveCashEvent(form) {
+  const v=getForm(form);
+  const existing=data.cashEvents.find(e=>e.id===v.id);
+  const event={...existing,id:existing?.id ?? uid(),kind:v.kind,label:v.label.trim(),date:v.date,
+    endDate:v.endDate||null,direction:v.direction,impact:v.impact,
+    amount:num(v.amount),recurrenceMonths:Number(v.recurrenceMonths??0),
+    certainty:v.certainty,note:v.note.trim(),completedAt:existing?.completedAt??null};
+  if(existing)Object.assign(existing,event);else data.cashEvents.push(event);
+  validateData(data);
+  editingCashEventId=null;
+  persistWithDecision(existing?'调整资金事件':'新增资金事件','资金事件已保存，预测已重新计算。');
+  showView('cashflow');
+}
+
 function saveSettings(form) {
   const v=getForm(form);
   data.config={...data.config,gdMinNetIncome:num(v.gdMinNetIncome),gdMinCareerScore:num(v.gdMinCareerScore),
@@ -677,7 +703,8 @@ document.addEventListener('submit',async event=>{
   if (!(form instanceof HTMLFormElement)) return;
   event.preventDefault();
   const handlers={ 'light-form':saveLight,'major-form':saveMajor,'backup-form':saveBackup,'baseline-form':saveBaseline,'market-form':saveMarket,'finance-form':saveFinance,
-    'relationship-form':saveRelationship,'resign-form':saveResign,'offer-form':saveOffer,'settings-form':saveSettings };
+    'relationship-form':saveRelationship,'resign-form':saveResign,'offer-form':saveOffer,'settings-form':saveSettings,
+    'cash-event-form':saveCashEvent,'cashflow-settings-form':saveCashflowSettings };
   const before=structuredClone(data);
   try { await handlers[form.getAttribute('id')]?.(form); } catch (error) { data=before; const target=form.querySelector('.form-error'); if (target) target.textContent=error.message; else notice(error.message); }
 });
@@ -691,6 +718,26 @@ document.addEventListener('click',event=>{
   if (!action) return;
   const before=structuredClone(data);
   try {
+    if (['edit-cash-event','delete-cash-event','finish-cash-event','cancel-cash-edit'].includes(action)) {
+      if(action==='cancel-cash-edit'){editingCashEventId=null;render();return;}
+      const item=data.cashEvents.find(e=>e.id===target.dataset.id);
+      if(!item)throw new Error('没有找到这笔资金事项。');
+      if(action==='edit-cash-event'){editingCashEventId=item.id;render();return;}
+      if(action==='delete-cash-event'){
+        if(!confirm('删除这条资金事项及其后续重复记录？此操作不能撤销。'))return;
+        data.cashEvents=data.cashEvents.filter(e=>e.id!==item.id);
+        editingCashEventId=null;
+        persistWithDecision('删除资金事件','资金事件已删除，预测已重新计算。');
+        return;
+      }
+      if(action==='finish-cash-event'){
+        if(item.recurrenceMonths)throw new Error('周期事件不能整体标记支付；请修改下次日期或保留重复计划。');
+        if(!confirm('确认已经发生？完成后请同步更新现金余额，避免资金预测沿用支付前的余额。'))return;
+        item.completedAt=todayISO();
+        persistWithDecision('确认资金事项完成','已记录事项完成；请同步更新可用现金。');
+        return;
+      }
+    }
     if (action === 'complete-checkpoint' || action === 'reopen-checkpoint') {
       const id = target.dataset.id;
       if (!CHECKPOINTS.some(item => item.id === id)) throw new Error('未知计划节点。');
@@ -739,6 +786,22 @@ document.addEventListener('click',event=>{
 });
 
 document.addEventListener('change',async event=>{
+  if(event.target.name==='kind' && event.target.closest('#cash-event-form')){
+    const v=event.target.value,form=event.target.closest('form');
+    const defaults={insurance:['out','extra','0'],rent:['out','living','3'],bonus:['in','extra','0'],
+      offer:['milestone','milestone','0'],first_pay:['milestone','milestone','0'],moving:['out','extra','0'],other:['out','extra','0']};
+    const [direction,impact,repeat]=defaults[v]??defaults.other;
+    form.querySelector('[name="direction"]').value=direction;
+    form.querySelector('[name="impact"]').value=impact;
+    form.querySelector('[name="recurrenceMonths"]').value=repeat;
+    return;
+  }
+  if(event.target.name==='direction' && event.target.closest('#cash-event-form')){
+    const form=event.target.closest('form'),milestone=event.target.value==='milestone';
+    if(milestone)form.querySelector('[name="impact"]').value='milestone';
+    else if(form.querySelector('[name="impact"]').value==='milestone')form.querySelector('[name="impact"]').value='extra';
+    return;
+  }
   if (event.target.name === 'update-topic') { feedbackTab=event.target.value;editingOfferId=null;render();return; }
   if (event.target.name === 'city') { const plan=event.target.closest('form').querySelector('[data-shanghai-plan]');if(plan) plan.hidden=event.target.value !== '上海';return; }
   if (event.target.name === 'manualOverride') { event.target.closest('form').querySelector('[data-exception]').hidden=event.target.value !== 'true';return; }
