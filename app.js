@@ -128,6 +128,22 @@ function renderFiveQuestions(d) {
   const syncTargets={financial:['更新收入和负债','feedback','finance'],offer:['更新岗位信息','offers',null],career:['更新工作情况','feedback','baseline'],energy:['更新工作感受','feedback','baseline'],relationship:['更新女朋友的安排','feedback','relationship']};
   const pendingLinks=[...new Set(pending.map(item=>item.factType))].map(type=>syncTargets[type]).filter(Boolean).map(([label])=>label).join('、');
   const pendingNote=pending.length ? `<div class="inline-alert">有 ${pending.length} 条旧记录只写了文字，具体数字或安排还没更新。请从“更新近况”进入对应内容：${pendingLinks}</div>`:'';
+  const fresh=financeSnapshot(data,todayISO()), forecast=projectCashflow(data,todayISO());
+  const verifiedSnapshot=fresh.certainty === 'confirmed' && fresh.status === 'fresh';
+  const certainFacts=verifiedSnapshot ? `现金 ${money(current.cashBalance)}、月到手 ${money(current.monthlyNetIncome)}（${dateLabel(fresh.date)}用户核对）` :
+    '尚无近期已核对的完整财务基准';
+  const estimatedFacts=[`月供＋生活费根据月度预算估算：${money(d.finance.required)}`];
+  if(forecast.available)estimatedFacts.push(`未来30天谨慎最低现金估算：${money(forecast.periods[0].cautiousLowest)}`);
+  const waitingFacts=[
+    ...(fresh.status!=='fresh' ? ['可用现金最近的实际日期与金额'] : []),
+    ...(forecast.issues.length ? forecast.issues.slice(0,2) : []),
+    ...((data.offers??[]).some(o=>o.firstPayDate) ? ['新岗位首薪实际金额与到账情况'] : [])
+  ];
+  const decisionEvidence=`<details class="evidence-details"><summary>判断依据：已确认、估算与待确认</summary><div class="evidence-groups">
+    <p><strong>已确认</strong> ${escapeHTML(certainFacts)}</p>
+    <p><strong>估算 / 假设</strong> ${estimatedFacts.map(escapeHTML).join('；')}</p>
+    <p><strong>待确认</strong> ${waitingFacts.length ? waitingFacts.map(escapeHTML).join('；'):'当前未列出新的待确认项'}</p>
+  </div><button class="text-link" type="button" data-view="cashflow">查看现金流计算细节</button></details>`;
   const snapshot=`<p class="question-note">目前保存的数据：现金 ${money(current.cashBalance)} · 负债 ${money(current.debtBalance)} · 每月剩余 ${money(d.finance.monthlyBalance)}${focusOffer ? `；${selected ? '已选':'最新录入'}机会 ${escapeHTML(focusOffer.city)} / 到手 ${money(focusOffer.monthlyNetIncome)}`:''}；你和女朋友想去的地方${data.partnerPlan.sharedDestinationAligned === true ? '一致':data.partnerPlan.sharedDestinationAligned === false ? '未一致':'未确认'}。</p>`;
   const signals=[...d.blockers,...d.warnings.filter(w=>['yellow','red'].includes(w.level))];
   const driftResult=!baselineReady ? '资料不足，不能判定是否偏离原计划':d.requiresRedecision ? '需要重新考虑原来的选择':d.blockers.length ? '还有条件没确认好，暂不建议提离职':signals.length ? '有几件事需要留意':'目前没有发现明显偏离原计划';
@@ -137,7 +153,7 @@ function renderFiveQuestions(d) {
     <article><h3>2. 当初为什么这样选？</h3>${reasons}</article>
     <article><h3>3. 当初的条件现在还成立吗？</h3>${premises}${uncertainty}${r.manualOverride ? `<p class="question-note">例外理由于 ${dateLabel(r.manualOverride.nextReviewAt)} 复查。</p>`:''}</article>
     <article><h3>4. 最近有什么变化？</h3><p class="question-result">${latest.length ? `最近记录 ${latest.length} 条变化`:'尚无新变化记录'}</p>${facts}${pendingNote}${snapshot}</article>
-    <article><h3>5. 我的计划有没有走偏？</h3><p class="question-result">${driftResult}</p>${!baselineReady ? '<p>先补齐现金、负债、收入和必要支出，暂不作“没有偏离原计划”的结论。</p>':signals.length ? `<ul class="plain-list">${signals.slice(0,3).map(x=>`<li>${escapeHTML(x.text)}</li>`).join('')}</ul>`:'<p>目前没有发现必须重新选择的情况，按时更新近况就好。</p>'}${difference}<p class="question-next">下一步：${escapeHTML(nextAction)}</p></article>
+    <article><h3>5. 我的计划有没有走偏？</h3><p class="question-result">${driftResult}</p>${!baselineReady ? '<p>先补齐现金、负债、收入和必要支出，暂不作“没有偏离原计划”的结论。</p>':signals.length ? `<ul class="plain-list">${signals.slice(0,3).map(x=>`<li>${escapeHTML(x.text)}</li>`).join('')}</ul>`:'<p>目前没有发现必须重新选择的情况，按时更新近况就好。</p>'}${difference}${decisionEvidence}<p class="question-next">下一步：${escapeHTML(nextAction)}</p></article>
   </div><details><summary>匹配分数与资料完整度怎么算？</summary><p>匹配分数权重：招聘进展占 20%，工作成长占 25%，收入能否覆盖开支占 20%，城市和时间安排占 20%，是否满足选择条件占 15%。资料完整度表示工资、开支、招聘进展、工作成长、换工作费用、试用期和双方安排等 7 类资料填了多少。</p></details>`);
 }
 function renderLightForm() {
@@ -177,6 +193,7 @@ function renderHome() {
   return pageHeader('今天的判断', '基于事实，做更适合自己的选择') +
     `<section class="section hero-grid">${hero}</section>` +
     renderFiveQuestions(decision) +
+    renderCashflowPreview() +
     section('接下来要记住的日期', `<p>下次近况检查：${dateLabel(decision.nextCheckAt)}（${relativeDue(decision.nextCheckAt)}）${nextCheckpoint() ? ` · 下一计划节点：${dateLabel(nextCheckpoint().date)}` : ''}</p>${renderTimelineRail()}<button type="button" class="text-link" data-view="timeline">查看全部节点与完成记录</button>`, '计划日期不代表任务已完成；完成情况以保存的记录为准。') +
     `<section class="section"><details><summary>查看收入、负债和每月剩余的钱</summary>${renderFinanceSummary()}</details></section>`;
 }
@@ -289,7 +306,7 @@ function renderCashflow() {
 
 function renderFinanceSummary() {
   const b=data.baseline, f=financialCapacity(data);
-  return `<dl class="metric-list"><div><dt>月到手</dt><dd>${money(b.monthlyNetIncome)}</dd></div><div><dt>月供 + 基本生活</dt><dd>${money(f.required)}</dd></div><div><dt>每月剩余</dt><dd class="${f.monthlyBalance < 0 ? 'negative':''}">${money(f.monthlyBalance)}</dd></div><div><dt>如果一个月没工资</dt><dd>${{UNKNOWN:'信息不足',COVERED:'可覆盖',TIGHT:'紧张',UNAFFORDABLE:'无法覆盖'}[f.stress]}</dd></div></dl><p class="note">扣除已知大额支出后检查必要开支承受能力，这只能帮助你看备用现金够不够，提离职前还要确认岗位和交接条件。</p>`;
+  return `<p class="note">最近财务数据：${escapeHTML(financeFreshnessText())}。建议核对是否已经发生新的还款、奖金或车险支出。</p><dl class="metric-list"><div><dt>月到手</dt><dd>${money(b.monthlyNetIncome)}</dd></div><div><dt>月供 + 基本生活</dt><dd>${money(f.required)}</dd></div><div><dt>每月剩余</dt><dd class="${f.monthlyBalance < 0 ? 'negative':''}">${money(f.monthlyBalance)}</dd></div><div><dt>如果一个月没工资</dt><dd>${{UNKNOWN:'信息不足',COVERED:'可覆盖',TIGHT:'紧张',UNAFFORDABLE:'无法覆盖'}[f.stress]}</dd></div></dl><p class="note">扣除已知大额支出后检查必要开支承受能力，这只能帮助你看备用现金够不够，提离职前还要确认岗位和交接条件。</p>`;
 }
 
 function renderFeedback() {
