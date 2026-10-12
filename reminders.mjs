@@ -1,4 +1,4 @@
-import { CHECKPOINTS, isDate } from "./data.mjs";
+import { CHECKPOINTS, isDate, checkpointCompletion } from "./data.mjs";
 
 const escapeText = value => String(value).replace(/\\/g, "\\\\").replace(/\r?\n/g, "\\n").replace(/;/g, "\\;").replace(/,/g, "\\,");
 
@@ -37,10 +37,7 @@ export function makeCalendar(data) {
   ];
   for (const item of CHECKPOINTS) {
     // Completed milestones should not be added to a newly exported calendar.
-    const completion = data?.config?.checkpointCompletions?.[item.id];
-    const baselineRecorded = item.id === 'baseline' && completion === undefined &&
-      (data?.decisionHistory ?? []).some(entry => entry.source === '基本资料');
-    if ((completion && isDate(completion)) || baselineRecorded) continue;
+    if (checkpointCompletion(data, item.id)) continue;
     lines.push(...event(item.id, overrides[item.id] ?? item.date, `${item.type === 'major' ? '重新考虑去向' : '记录近况'}：${item.label}`, stamp));
   }
   const route = data?.routeDecision ?? {};
