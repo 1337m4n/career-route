@@ -34,7 +34,7 @@ try {
   const select=async (form,name,value)=>page.locator('#'+form+' [name="'+name+'"]').selectOption(value);
   const submit=async form=>page.locator('#'+form+' button[type="submit"]').click();
   const stored=()=>page.evaluate(()=>JSON.parse(localStorage.getItem('career-route:v1')));
-  const today=new Date().toISOString().slice(0,10),future=n=>new Date(Date.parse(today)+n*86400000).toISOString().slice(0,10);
+  const today=new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()),future=n=>new Date(Date.parse(today)+n*86400000).toISOString().slice(0,10);
   await page.goto(url);
   await page.getByRole('heading',{name:'今天的判断'}).waitFor();
   assert.equal(await page.title(),'今日判断 · 工作与搬家计划');
