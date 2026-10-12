@@ -182,9 +182,9 @@ try {
   assert.equal((await stored()).config.checkpointOverrides.baseline,'2026-01-01',await page.locator('#settings-form .form-error').innerText());
   await navigate('home');
   const nextSection=page.locator('.section').filter({has:page.getByRole('heading',{name:'接下来要记住的日期'})});
-  assert.match(await nextSection.innerText(),/下次更新近况/);
-  assert.doesNotMatch(await nextSection.innerText(),/2026年1月1日/);
-  assert.match(await nextSection.innerText(),/原定提醒日期已全部过去/);
+  assert.match(await nextSection.innerText(),/下次近况检查/);
+  assert.match(await nextSection.innerText(),/下一计划节点：2026年1月1日/);
+  assert.match(await nextSection.innerText(),/日期已过 · 待确认/);
   assert.equal(external.length,0);assert.deepEqual(errors,[]);
   const insecurePage=await browser.newPage();
   await insecurePage.route('http://insecure.example/**',async route=>{
