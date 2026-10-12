@@ -52,7 +52,7 @@ function occurrenceDates(e,today,horizon) {
   for(let i=0;i<150;i++){
     const date=i===0 ? e.date : addCalendarMonths(e.date,(e.recurrenceMonths ?? 0)*i);
     if(date > limit || date > end)break;
-    if(date > today)dates.push(date);
+    if(date >= today)dates.push(date);
     if(!e.recurrenceMonths)break;
   }
   return dates;
@@ -71,7 +71,7 @@ export function expandCashEvents(data,today,horizon=90) {
   const bonusDate=data?.baseline?.bonusPayDate;
   const bonusAmount=data?.baseline?.bonusAmount;
   if(validMoney(bonusAmount) && bonusAmount>0 &&
-     inRange(bonusDate,isoPlus(today,1),isoPlus(today,horizon)) &&
+     inRange(bonusDate,today,isoPlus(today,horizon)) &&
      !(data?.cashEvents ?? []).some(e=>e.kind==='bonus' && !e.completedAt)){
     rows.push({id:'baseline-bonus',originId:'baseline-bonus',label:'预计奖金（来自基本资料）',
       date:bonusDate,kind:'bonus',direction:'in',impact:'extra',certainty:'likely',
@@ -82,7 +82,7 @@ export function expandCashEvents(data,today,horizon=90) {
   for(const o of data?.offers ?? []){
     const offerLabel=o.company || '岗位';
     for(const [date,label] of [[o.responseDueDate,'Offer答复'],[o.startDate,'预计入职'],[o.firstPayDate,'预计首薪']]){
-      if(inRange(date,isoPlus(today,1),isoPlus(today,horizon)))
+      if(inRange(date,today,isoPlus(today,horizon)))
         rows.push({id:'offer-'+o.id+'-'+label,originId:'offer-'+o.id,label:offerLabel+' · '+label,date,kind:'offer',direction:'milestone',impact:'milestone',certainty:o.certainty ?? 'unknown',amount:null,virtual:true});
     }
   }
@@ -131,6 +131,16 @@ export function projectCashflow(data,today) {
     eventMap.get(e.date).push(e);
   }
   let cautious=b.cashBalance,scenario=b.cashBalance,cautiousLowest=b.cashBalance,scenarioLowest=b.cashBalance,firstDeficit=null;
+  // Same-day unpaid events are not silently dropped. Today's existing salary is
+  // not credited again: the cash snapshot is assumed to reflect current cash.
+  for(const e of eventMap.get(today) ?? []){
+    const change=(e.direction==='in'?1:-1)*e.amount;
+    if(e.direction==='out'||e.certainty==='confirmed')cautious+=change;
+    scenario+=change;
+  }
+  cautiousLowest=Math.min(cautiousLowest,cautious);
+  scenarioLowest=Math.min(scenarioLowest,scenario);
+  if(cautious<0)firstDeficit=today;
   const daily=[];
   for(let i=1;i<=90;i++){
     const date=isoPlus(today,i);
@@ -151,10 +161,10 @@ export function projectCashflow(data,today) {
   }
   const periods=[30,60,90].map(days=>{
     const values=daily.slice(0,days);
-    const minC=Math.min(b.cashBalance,...values.map(x=>x.cautious));
-    const minS=Math.min(b.cashBalance,...values.map(x=>x.scenario));
+    const minC=Math.min(b.cashBalance,cautiousLowest,...values.map(x=>x.cautious));
+    const minS=Math.min(b.cashBalance,scenarioLowest,...values.map(x=>x.scenario));
     const last=values.at(-1);
-    const firstShort=values.find(v=>v.cautious<0);
+    const firstShort=firstDeficit===today ? {date:today} : values.find(v=>v.cautious<0);
     return {days,date:last.date,cautiousEnd:last.cautious,scenarioEnd:last.scenario,
       cautiousLowest:money2(minC),scenarioLowest:money2(minS),gap:money2(Math.max(0,-minC)),
       firstDeficit:firstShort?.date??null,status:firstShort?'shortfall':minC < b.monthlyDebtPayment ? 'tight':'buffer'};
