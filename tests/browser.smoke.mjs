@@ -50,6 +50,25 @@ try {
   for (const key of ['technologyDepth','responsibility','transferability','targetFit','outcomes']) await select('baseline-form','career_'+key,'true');
   await submit('baseline-form');await page.getByRole('heading',{name:'今天的判断'}).waitFor();
   assert.equal((await stored()).schemaVersion,2);
+  // Saving baseline marks its milestone complete using the recorded day, not the due day.
+  assert.match(await page.locator('.timeline-node.is-complete').innerText(),/已完成/);
+  await navigate('timeline');
+  const baselineRow=page.locator('.full-timeline li').first();
+  assert.match(await baselineRow.innerText(),/已完成/);
+  const yesterday=new Date(Date.parse(today)-86400000).toISOString().slice(0,10);
+  await baselineRow.locator('input[type="date"]').fill(yesterday);
+  await baselineRow.getByRole('button',{name:'修改日期'}).click();
+  assert.equal((await stored()).config.checkpointCompletions.baseline,yesterday);
+  await navigate('timeline');
+  const futureRow=page.locator('.full-timeline li').nth(1);
+  await futureRow.locator('input[type="date"]').fill(yesterday);
+  await futureRow.getByRole('button',{name:'标记完成'}).click();
+  assert.equal((await stored()).config.checkpointCompletions.market_midpoint,yesterday);
+  await navigate('timeline');
+  assert.match(await page.locator('.full-timeline li').nth(1).innerText(),/提前完成/);
+  await page.locator('.full-timeline li').nth(1).getByRole('button',{name:'撤销完成'}).click();
+  assert.equal((await stored()).config.checkpointCompletions.market_midpoint,null);
+  await navigate('home');
   const before=await stored();await navigate('feedback');await tab('light');await page.getByRole('button',{name:'最近没有变化，记录一下就好',exact:true}).click();
   const after=await stored();assert.deepEqual(before.baseline,after.baseline);assert.equal(after.checkIns.at(-1).noChange,true);assert.equal(after.checkIns.at(-1).searchActionAt,undefined);
   await navigate('home');
@@ -163,9 +182,9 @@ try {
   assert.equal((await stored()).config.checkpointOverrides.baseline,'2026-01-01',await page.locator('#settings-form .form-error').innerText());
   await navigate('home');
   const nextSection=page.locator('.section').filter({has:page.getByRole('heading',{name:'接下来要记住的日期'})});
-  assert.match(await nextSection.innerText(),/下次更新近况/);
-  assert.doesNotMatch(await nextSection.innerText(),/2026年1月1日/);
-  assert.match(await nextSection.innerText(),/原定提醒日期已全部过去/);
+  assert.match(await nextSection.innerText(),/下次近况检查/);
+  assert.match(await nextSection.innerText(),/下一计划节点：2026年1月1日/);
+  assert.match(await nextSection.innerText(),/日期已过 · 待确认/);
   assert.equal(external.length,0);assert.deepEqual(errors,[]);
   const insecurePage=await browser.newPage();
   await insecurePage.route('http://insecure.example/**',async route=>{

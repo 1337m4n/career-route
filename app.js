@@ -1,4 +1,4 @@
-import { CHECKPOINTS, createInitialData, loadData, saveData, clearData, importData, validateData, downloadBackup, appendDecision, recordRouteDecision, download, isDate } from './data.mjs';
+import { CHECKPOINTS, createInitialData, loadData, saveData, clearData, importData, validateData, downloadBackup, appendDecision, recordRouteDecision, download, isDate, checkpointCompletion } from './data.mjs';
 import { downloadCalendar } from './reminders.mjs';
 import { evaluate, validateBaseline, qualifyGuangdongOffer, qualifyShanghaiOffer, routeTendencies, deriveCareer, deriveEnergy, CAREER_WEIGHTS, financialCapacity, resignBlockers, addMonths, bridgeRenewalErrors } from './rules.mjs';
 
@@ -40,7 +40,11 @@ function addDays(iso, days) { const date = new Date(`${iso}T12:00:00+08:00`); da
 function daysBetween(a, b) { if (!a || !b) return null; return Math.round((Date.parse(`${b}T12:00:00+08:00`) - Date.parse(`${a}T12:00:00+08:00`)) / 86400000); }
 function checkpointDate(item) { return data.config?.checkpointOverrides?.[item.id] || item.date; }
 function checkpoints() { return CHECKPOINTS.map(item => ({ ...item, date: checkpointDate(item) })).sort((a, b) => a.date.localeCompare(b.date)); }
-function nextCheckpoint() { return checkpoints().find(item => item.date >= todayISO()); }
+function nextCheckpoint() { return checkpoints().find(item => !checkpointCompletion(data, item.id)); }
+function checkpointState(item) {
+  const completedAt = checkpointCompletion(data, item.id);
+  return { completedAt, state: completedAt ? 'complete' : item.date < todayISO() ? 'past' : item.date === todayISO() ? 'today' : 'future' };
+}
 function viewFromHash() { const raw = location.hash.slice(1); return VIEWS.has(raw) ? raw : 'home'; }
 function notice(text) { toast.textContent = text; toast.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.classList.remove('show'), 3900); }
 function showView(view, tab) { if (view === 'feedback') feedbackTab = FEEDBACK_TABS.includes(tab) ? tab : ''; if (view === currentView) render(); else location.hash = view; window.scrollTo({ top: 0, behavior: 'instant' }); }
@@ -162,7 +166,7 @@ function renderMajorForm() {
   ${formActions('保存我的选择')}</form>`;
 }
 
-function relativeDue(date) { const days = daysBetween(todayISO(), date); return days == null ? '' : days < 0 ? `已逾期 ${-days} 天` : days === 0 ? '今天' : `${days} 天后`; }
+function relativeDue(date) { const days = daysBetween(todayISO(), date); return days == null ? '' : days < 0 ? `超过计划日 ${-days} 天` : days === 0 ? '今天' : `${days} 天后`; }
 
 function renderHome() {
   const decision = evaluate(data, todayISO());
@@ -171,7 +175,7 @@ function renderHome() {
   return pageHeader('今天的判断', '基于事实，做更适合自己的选择') +
     `<section class="section hero-grid">${hero}</section>` +
     renderFiveQuestions(decision) +
-    section('接下来要记住的日期', `<p>下次更新近况：${dateLabel(decision.nextCheckAt)}（${relativeDue(decision.nextCheckAt)}）</p>${renderTimelineRail()}<button type="button" class="text-link" data-view="timeline">查看全部提醒</button>`, '到时看看情况有没有变化，再决定下一步。') +
+    section('接下来要记住的日期', `<p>下次近况检查：${dateLabel(decision.nextCheckAt)}（${relativeDue(decision.nextCheckAt)}）${nextCheckpoint() ? ` · 下一计划节点：${dateLabel(nextCheckpoint().date)}` : ''}</p>${renderTimelineRail()}<button type="button" class="text-link" data-view="timeline">查看全部节点与完成记录</button>`, '计划日期不代表任务已完成；完成情况以保存的记录为准。') +
     `<section class="section"><details><summary>查看收入、负债和每月剩余的钱</summary>${renderFinanceSummary()}</details></section>`;
 }
 function renderSetupHero(check) {
@@ -194,10 +198,20 @@ function nextStageButton(state) {
 }
 function renderTimelineRail() {
   const items = checkpoints();
-  const next = nextCheckpoint();
-  if (!next) return '<p>原定提醒日期已全部过去，继续按上方“下次更新近况”的日期记录即可。</p>';
-  const selected = [items[0], ...items.filter(item => item.date >= todayISO()).slice(0, 3)].filter(Boolean).filter((item, index, arr) => arr.findIndex(x => x.id === item.id) === index).slice(0, 4);
-  return `<div class="timeline-rail" aria-label="近期关键节点">${selected.map(item => `<div class="timeline-node ${item.id === next?.id ? 'is-current' : ''}"><b>${escapeHTML(shortDate(item.date))}</b><span>${escapeHTML(item.label)}</span></div>`).join('')}</div>`;
+  const pending = items.filter(item => !checkpointCompletion(data, item.id));
+  const completed = items.filter(item => checkpointCompletion(data, item.id)).at(-1);
+  const selected = [...(completed ? [completed] : []), ...pending.slice(0, completed ? 3 : 4)]
+    .filter((item, index, arr) => arr.findIndex(x => x.id === item.id) === index);
+  if (!selected.length) return '<p>所有计划节点已完成。可在“重要日期”中查看实际完成日期。</p>';
+  const next = pending[0];
+  return `<div class="timeline-rail" aria-label="近期关键节点">${selected.map(item => {
+    const { completedAt, state } = checkpointState(item);
+    const status = completedAt ? `✓ 已完成 · ${shortDate(completedAt)}${completedAt < item.date ? '（提前）' : ''}` :
+      state === 'past' ? '日期已过 · 待确认' : '待完成';
+    return `<div class="timeline-node ${item.id === next?.id ? 'is-current' : ''} ${completedAt ? 'is-complete' : ''}" aria-label="${escapeHTML(item.label+'，'+status)}">
+      <b>${escapeHTML(shortDate(item.date))}</b><span>${escapeHTML(item.label)}</span><small>${escapeHTML(status)}</small>
+    </div>`;
+  }).join('')}</div>`;
 }
 function renderFinanceSummary() {
   const b=data.baseline, f=financialCapacity(data);
@@ -219,7 +233,7 @@ function renderBaselineForm() {
     certaintySelect('financeCertainty','以上这些数字有多确定？',b.certainty ?? 'confirmed'))}
   <details><summary>补充工作、女朋友安排和奖金（可以以后再填）</summary>
   ${formSection('2. 工作成长情况',input('targetRoles','长期目标岗位',data.profile.targetRoles.join('、'),{full:true,help:'允许尚未确定。'})+careerFields(b.careerFacts,true)+textarea('careerEvidence','过去三个月的成长依据',b.careerEvidence,{help:'新技能、真实职责、到别的公司也用得上的成果；可以暂时未知。'})+careerOutput(b.careerFacts))}
-  ${formSection('3. 最近两周体验',energyFields(b.energyFacts),'体验只用于提醒，不是心理或医疗诊断。')}
+  ${formSection('3. 最近两周体验',energyFields(b.energyFacts),'工作体验只用于提醒你复查职业路线，不会单独决定是否离职。')}
   ${formSection('4. 可稍后补充的边界',
     select('sharedDestinationAligned','你和女朋友是否都想去广东？',String(p.sharedDestinationAligned ?? ''),[['true','一致'],['false','暂不一致'],['unknown','尚未确认']])+
     input('nextRelationshipReviewAt','哪天再和女朋友商量？',p.nextRelationshipReviewAt,{type:'date'})+
@@ -354,11 +368,26 @@ function renderOfferForm(o) {
 }
 
 function renderTimeline() {
-  const items = checkpoints();
-  const today = todayISO();
-  const list = `<ol class="full-timeline">${items.map(item => `<li><time datetime="${escapeHTML(item.date)}">${escapeHTML(shortDate(item.date))}</time><div><b>${escapeHTML(item.label)} · ${item.type === 'major' ? '重新考虑去向':'记录近况'}</b><p>${escapeHTML(item.description || '')}</p></div><span class="${item.date < today ? 'past' : item.date === today ? 'today' : ''}">${escapeHTML(relativeDue(item.date))}</span></li>`).join('')}</ol>`;
+  const items = checkpoints(), today = todayISO();
+  const list = `<ol class="full-timeline">${items.map(item => {
+    const { completedAt, state } = checkpointState(item);
+    const status = completedAt ? `✓ 已完成 · ${dateLabel(completedAt)}${completedAt < item.date ? '（提前完成）' : ''}` :
+      state === 'past' ? '计划日期已过，尚未确认完成' : state === 'today' ? '今天计划完成' : '待完成';
+    return `<li class="${completedAt ? 'is-complete' : ''}">
+      <time datetime="${escapeHTML(item.date)}">${escapeHTML(shortDate(item.date))}</time>
+      <div><b>${escapeHTML(item.label)} · ${item.type === 'major' ? '重新考虑去向':'记录近况'}</b>
+        <p>${escapeHTML(item.description || '')}</p><p class="checkpoint-status ${completedAt ? 'complete' : state}">${escapeHTML(status)}</p></div>
+      <div class="checkpoint-controls">
+        <label for="done_${item.id}">实际完成日期</label>
+        <input id="done_${item.id}" name="completed_${item.id}" type="date" value="${escapeHTML(completedAt || today)}" max="${escapeHTML(today)}" aria-label="${escapeHTML(item.label)}的实际完成日期"/>
+        <button type="button" class="btn btn-secondary" data-action="complete-checkpoint" data-id="${escapeHTML(item.id)}">${completedAt ? '修改日期' : '标记完成'}</button>
+        ${completedAt ? `<button type="button" class="text-link" data-action="reopen-checkpoint" data-id="${escapeHTML(item.id)}">撤销完成</button>` : ''}
+      </div></li>`;
+  }).join('')}</ol>`;
   const bridge = data.routeDecision?.bridgeExitDate ? `<div class="inline-alert spaced-top">你的上海过渡计划：${escapeHTML(dateLabel(data.routeDecision.gdSearchRestartDate))} 重新投广东岗位；${escapeHTML(dateLabel(data.routeDecision.bridgeExitDate))} 做强制重新决定下一步。实际入职后的六个月上限仍需单独检查。</div>` : '';
-  return pageHeader('重要日期', '关键节点提醒') + section('2026 年 9 月 — 2027 年 6 月', `<div class="btn-row calendar-actions"><button type="button" class="btn btn-primary" data-action="export-calendar">下载提醒，导入手机日历</button></div>${list}${bridge}<p class="note">导入手机或电脑日历后，日历应用负责到期提醒。站内提醒仅在打开页面时显示。事件标题不含你的收入、负债或女朋友的资料。</p>`);
+  return pageHeader('重要日期', '关键节点提醒') + section('2026 年 9 月 — 2027 年 6 月', `<div class="btn-row calendar-actions"><button type="button" class="btn btn-primary" data-action="export-calendar">下载提醒，导入手机日历</button></div>
+  <p class="note">对已经完成的事项填写实际日期（允许提前完成），点击“标记完成”。系统会保存对勾和日期，刷新后仍有效；仅到日期不会自动算作完成。</p>
+  ${list}${bridge}<p class="note">重新下载的日历会排除已完成节点；此前导入的日历事件不会自动删除。个人数据只保存在当前浏览器。</p>`);
 }
 function renderHistory() {
   const formal=[...data.decisions].reverse(),history=[...data.decisionHistory].reverse();
@@ -563,6 +592,18 @@ document.addEventListener('click',event=>{
   if (!action) return;
   const before=structuredClone(data);
   try {
+    if (action === 'complete-checkpoint' || action === 'reopen-checkpoint') {
+      const id = target.dataset.id;
+      if (!CHECKPOINTS.some(item => item.id === id)) throw new Error('未知计划节点。');
+      const completedAt = action === 'complete-checkpoint' ?
+        app.querySelector('[name="completed_'+id+'"]')?.value : null;
+      if (action === 'complete-checkpoint' && (!isDate(completedAt) || completedAt > todayISO())) {
+        throw new Error('请填写有效的完成日期，不能晚于今天。');
+      }
+      data.config.checkpointCompletions = { ...data.config.checkpointCompletions, [id]:completedAt };
+      persistWithDecision('计划节点状态更新', completedAt ? '已保存完成状态和实际日期。' : '已撤销完成状态，节点恢复待办。');
+      return;
+    }
     if (action==='no-change') { data.checkIns.push({id:uid(),type:'light',noChange:true,createdAt:new Date().toISOString()}); persistWithDecision('记录近况：没有变化','已记录，之前填写的情况保持不变。'); showView('home'); return; }
     if (action==='review-premises') { reviewPremises(getForm(target.closest('form')));persistWithDecision('确认条件');return; }
     if (action==='export-backup') { if (!confirm('明文备份包含你的负债、收入、关系和我的记录。确定关闭导出加密吗？')) return; notice(`备份已下载：${downloadBackup(data)}`); return; }

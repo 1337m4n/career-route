@@ -1,4 +1,4 @@
-import { CHECKPOINTS, isDate } from './data.mjs';
+import { CHECKPOINTS, isDate, checkpointCompletion } from './data.mjs';
 const DAY = 86400000;
 const ACTIVE = new Set(['NOTICE_AND_HANDOVER','SHANGHAI_BRIDGE_ACTIVE','GUANGDONG_MIGRATION','GUANGDONG_SETTLING','STABLE']);
 const SEARCH = new Set(['MARKET_TESTING','HOLD_AND_SEARCH','SHANGHAI_BRIDGE_ACTIVE']);
@@ -184,7 +184,7 @@ function warningsFor(data,today) {
   }
   const recent = (data.checkIns ?? []).filter(x=>['market','light'].includes(x.type)).slice(-2);
   if (recent.length === 2 && recent.every(x=>x.waitReason?.trim())) w.push({code:'D03',level:'yellow',text:'连续两次选择再等等，看看等待是否真的能带来新的好处。'});
-  if (deriveEnergy(data.baseline?.energyFacts) === 'HIGH_RISK' || data.healthSafetyAffected) w.push({code:'E01',level:'yellow',text:'工作体验显示生活受到明显消耗，建议更早看看是否需要调整工作；并非医疗判断。'});
+  if (deriveEnergy(data.baseline?.energyFacts) === 'HIGH_RISK' || data.healthSafetyAffected) w.push({code:'E01',level:'yellow',text:'近期工作明显消耗精力，建议结合岗位成长、收入和求职进展，复查是否需要调整换工作节奏。'});
   const finance = (data.checkIns ?? []).filter(x=>x.type === 'finance').at(-1);
   if (finance && ['CashBalance','DebtBalance'].some(k=>finance['planned'+k] > 0 && nonnegative(finance[k[0].toLowerCase()+k.slice(1)]) && Math.abs(finance[k[0].toLowerCase()+k.slice(1)]-finance['planned'+k])/finance['planned'+k] > (data.config?.planVarianceWarningRate ?? 0.1))) w.push({code:'D02',level:'yellow',text:'收入和负债事实偏离原计划，需要复查。'});
   const premises = r.decisionPremises ?? [], invalid = premises.filter(x=>x.importance !== 'supporting' && x.status === 'invalid');
@@ -221,7 +221,7 @@ export function evaluate(data,today) {
   for (const o of [...gd,...sh]) warnings.push(...(o.city === '上海' ? qualifyShanghaiOffer(o,data,today):qualifyGuangdongOffer(o,data,today)).warnings.map(w=>({...w,level:'info'})));
   if (gd.some(o=>data.baseline?.bonusAmount > 0 && isDate(data.baseline?.bonusPayDate) && isDate(o.startDate) && o.startDate < data.baseline.bonusPayDate && o.canDelayStart === false)) reasons.push(issue('R05','等奖金可能错过这个合适岗位，请比较奖金和新工作的长期好处。'));
   const requiresRedecision = dueBridge || warnings.some(w=>['P01','P02','P03','O02','T01'].includes(w.code));
-  const nextDates = [addDays(today,['RED','BLOCKED'].includes(riskState) ? 1:7),r.nextMajorReviewAt,r.manualOverride?.nextReviewAt,data.partnerPlan?.nextRelationshipReviewAt,r.gdSearchRestartDate,r.bridgeExitDate,...(data.checkIns ?? []).map(c=>c.nextReviewAt ?? c.pauseReviewAt),...CHECKPOINTS.map(cp=>data.config?.checkpointOverrides?.[cp.id] ?? cp.date),...offers.map(o=>o.responseDueDate)].filter(d=>isDate(d) && d > today).sort();
+  const nextDates = [addDays(today,['RED','BLOCKED'].includes(riskState) ? 1:7),r.nextMajorReviewAt,r.manualOverride?.nextReviewAt,data.partnerPlan?.nextRelationshipReviewAt,r.gdSearchRestartDate,r.bridgeExitDate,...(data.checkIns ?? []).map(c=>c.nextReviewAt ?? c.pauseReviewAt),...CHECKPOINTS.filter(cp=>!checkpointCompletion(data,cp.id)).map(cp=>data.config?.checkpointOverrides?.[cp.id] ?? cp.date),...offers.map(o=>o.responseDueDate)].filter(d=>isDate(d) && d > today).sort();
   const actions = blockers.length ? blockers.slice(0,3).map(b=>({text:b.text,dueDate:today})):warnings.some(w=>w.code === 'U04') ? [{text:requiresRedecision ? '先更新变化涉及的数字或安排，再决定下一步。':'先在“更新近况”里填写变化涉及的数字或安排。',dueDate:today}]:requiresRedecision ? [{text:'看看当初选择的条件是否还成立，再决定要不要调整计划。',dueDate:today}]:[{text:suggestedRoute === 'ROUTE_CHOICE_REQUIRED' ? '比较两地机会，保存选择与 2–5 条条件。':'有变化就更新近况；没变化也可以记一下。',dueDate:addDays(today,7)}];
   return {routeState,riskState,suggestedRoute,state:routeState,level:riskState === 'GREEN' ? 'green':['RED','BLOCKED'].includes(riskState) ? 'red':'yellow',reasons,warnings,blockers,actions,nextCheckAt:nextDates[0],requiresRedecision,premiseReview:r.decisionPremises ?? [],candidates:{guangdong:gd.map(o=>o.id),shanghai:sh.map(o=>o.id)},finance:financialCapacity(data),...knowledge(data),changingConditions:['出现符合职业与基本收入和负债要求的新书面录用通知','原重要条件失效，或出现新的未来收益证据','收入、关系方向或工作体验出现明显变化']};
 }

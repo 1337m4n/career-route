@@ -1,4 +1,4 @@
-import { CHECKPOINTS, isDate } from "./data.mjs";
+import { CHECKPOINTS, isDate, checkpointCompletion } from "./data.mjs";
 
 const escapeText = value => String(value).replace(/\\/g, "\\\\").replace(/\r?\n/g, "\\n").replace(/;/g, "\\;").replace(/,/g, "\\,");
 
@@ -35,7 +35,11 @@ export function makeCalendar(data) {
     "CALSCALE:GREGORIAN",
     "X-WR-TIMEZONE:Asia/Shanghai",
   ];
-  for (const item of CHECKPOINTS) lines.push(...event(item.id, overrides[item.id] ?? item.date, `${item.type === 'major' ? '重新考虑去向' : '记录近况'}：${item.label}`, stamp));
+  for (const item of CHECKPOINTS) {
+    // Completed milestones should not be added to a newly exported calendar.
+    if (checkpointCompletion(data, item.id)) continue;
+    lines.push(...event(item.id, overrides[item.id] ?? item.date, `${item.type === 'major' ? '重新考虑去向' : '记录近况'}：${item.label}`, stamp));
+  }
   const route = data?.routeDecision ?? {};
   if (route.gdSearchRestartDate) lines.push(...event("gd-search-restart", route.gdSearchRestartDate, "重新投广东岗位", stamp));
   if (route.bridgeExitDate) lines.push(...event("bridge-exit", route.bridgeExitDate, "上海过渡到期再看一次计划", stamp));
