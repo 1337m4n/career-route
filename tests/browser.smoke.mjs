@@ -50,6 +50,25 @@ try {
   for (const key of ['technologyDepth','responsibility','transferability','targetFit','outcomes']) await select('baseline-form','career_'+key,'true');
   await submit('baseline-form');await page.getByRole('heading',{name:'今天的判断'}).waitFor();
   assert.equal((await stored()).schemaVersion,2);
+  // Saving baseline marks its milestone complete using the recorded day, not the due day.
+  assert.match(await page.locator('.timeline-node.is-complete').innerText(),/已完成/);
+  await navigate('timeline');
+  const baselineRow=page.locator('.full-timeline li').first();
+  assert.match(await baselineRow.innerText(),/已完成/);
+  const yesterday=new Date(Date.parse(today)-86400000).toISOString().slice(0,10);
+  await baselineRow.locator('input[type="date"]').fill(yesterday);
+  await baselineRow.getByRole('button',{name:'修改日期'}).click();
+  assert.equal((await stored()).config.checkpointCompletions.baseline,yesterday);
+  await navigate('timeline');
+  const futureRow=page.locator('.full-timeline li').nth(1);
+  await futureRow.locator('input[type="date"]').fill(yesterday);
+  await futureRow.getByRole('button',{name:'标记完成'}).click();
+  assert.equal((await stored()).config.checkpointCompletions.market_midpoint,yesterday);
+  await navigate('timeline');
+  assert.match(await page.locator('.full-timeline li').nth(1).innerText(),/提前完成/);
+  await page.locator('.full-timeline li').nth(1).getByRole('button',{name:'撤销完成'}).click();
+  assert.equal((await stored()).config.checkpointCompletions.market_midpoint,null);
+  await navigate('home');
   const before=await stored();await navigate('feedback');await tab('light');await page.getByRole('button',{name:'最近没有变化，记录一下就好',exact:true}).click();
   const after=await stored();assert.deepEqual(before.baseline,after.baseline);assert.equal(after.checkIns.at(-1).noChange,true);assert.equal(after.checkIns.at(-1).searchActionAt,undefined);
   await navigate('home');
