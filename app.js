@@ -480,9 +480,15 @@ function renderTimeline() {
       </div></li>`;
   }).join('')}</ol>`;
   const bridge = data.routeDecision?.bridgeExitDate ? `<div class="inline-alert spaced-top">你的上海过渡计划：${escapeHTML(dateLabel(data.routeDecision.gdSearchRestartDate))} 重新投广东岗位；${escapeHTML(dateLabel(data.routeDecision.bridgeExitDate))} 做强制重新决定下一步。实际入职后的六个月上限仍需单独检查。</div>` : '';
+  const moneyEvents=expandCashEvents(data,today,90).slice(0,8);
+  const moneySchedule=moneyEvents.length ? moneyEvents.map(e=>`<li><time datetime="${escapeHTML(e.date)}">${escapeHTML(shortDate(e.date))}</time>
+     <span>${escapeHTML(e.label)} · ${escapeHTML(CASH_CERTAINTIES[e.certainty]||'未知')}${e.direction==='milestone'?' · 仅提醒':` · ${e.direction==='in'?'+':'−'}${money(e.amount)}`}</span></li>`).join('') :
+     '<li>还没有录入未来90天的资金事件。</li>';
   return pageHeader('重要日期', '关键节点提醒') + section('2026 年 9 月 — 2027 年 6 月', `<div class="btn-row calendar-actions"><button type="button" class="btn btn-primary" data-action="export-calendar">下载提醒，导入手机日历</button></div>
   <p class="note">对已经完成的事项填写实际日期（允许提前完成），点击“标记完成”。系统会保存对勾和日期，刷新后仍有效；仅到日期不会自动算作完成。</p>
-  ${list}${bridge}<p class="note">重新下载的日历会排除已完成节点；此前导入的日历事件不会自动删除。个人数据只保存在当前浏览器。</p>`);
+  ${list}${bridge}<p class="note">重新下载的日历会排除已完成节点；此前导入的日历事件不会自动删除。个人数据只保存在当前浏览器。</p>`) +
+    section('未来90天资金事件',`<ul class="cash-date-list">${moneySchedule}</ul>
+      <button class="text-link" type="button" data-view="cashflow">查看金额、确定程度和资金预测</button>`);
 }
 function renderHistory() {
   const formal=[...data.decisions].reverse(),history=[...data.decisionHistory].reverse();
