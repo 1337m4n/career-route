@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { decodeBackup } from '../crypto.mjs';
 
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
-const allowed = new Set(['index.html','styles.css','app.js','data.mjs','rules.mjs','crypto.mjs','reminders.mjs','favicon.svg']);
+const allowed = new Set(['index.html','styles.css','app.js','data.mjs','rules.mjs','crypto.mjs','reminders.mjs','cashflow.mjs','favicon.svg']);
 const prefix=process.env.CAREER_ROUTE_PREFIX || '';
 const server = createServer(async (req,res)=> {
   if (prefix && req.url===prefix) {res.writeHead(301,{Location:prefix+'/'});res.end();return;}
