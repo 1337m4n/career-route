@@ -131,3 +131,24 @@ test('基本资料中的预计奖金只进入情景收入，手动奖金避免�
   assert.equal(second.events.filter(e=>e.kind==='bonus').length,1);
   assert.equal(Math.round(second.periods[1].scenarioEnd-second.periods[1].cautiousEnd),7400);
 });
+
+test('今天到期且尚未完成的事项仍计入预测，今日工资不重复计入',()=>{
+  const d=fixture();
+  d.cashEvents.push(event('dueToday','2026-10-12',6500,{kind:'insurance'}));
+  const p=projectCashflow(d,'2026-10-12');
+  assert.equal(p.events.length,1);
+  assert.equal(p.periods[0].firstDeficit,'2026-10-12');
+  const salary=fixture();salary.baseline.monthlyDebtPayment=0;salary.baseline.monthlyLivingCost=0;
+  salary.cashflowSettings.salaryPayDay=12;
+  const noDouble=projectCashflow(salary,'2026-10-12');
+  assert.equal(noDouble.periods[0].cautiousEnd,5500);
+});
+
+test('远期大额支出不能污染30日或60日期间最低余额',()=>{
+  const d=fixture();d.baseline.cashBalance=50000;
+  d.cashEvents.push(event('farOut','2026-12-21',80000,{kind:'moving'}));
+  const p=projectCashflow(d,'2026-10-12');
+  assert.equal(p.periods[0].gap,0);
+  assert.equal(p.periods[1].gap,0);
+  assert.ok(p.periods[2].gap>0);
+});
