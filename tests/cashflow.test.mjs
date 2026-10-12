@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createInitialData,validateData } from '../data.mjs';
+import { evaluate } from '../rules.mjs';
 import { projectCashflow,expandCashEvents,financeSnapshot,addCalendarMonths } from '../cashflow.mjs';
 
 function fixture() {
@@ -104,4 +105,15 @@ test('非法金额、日期、重复事件和收入事件预算归类都被拒�
   assert.throws(()=>validateData(unknownConfirmed),/资金事件/);
   const brokenPause=structuredClone(d);brokenPause.cashflowSettings={salaryPayDay:8,incomePauseStart:'2026-11-15',incomePauseEnd:'2026-11-01'};
   assert.throws(()=>validateData(brokenPause),/现金流/);
+});
+
+test('30天资金缺口提醒能进入第五问判断，但明确是预测而非确定逾期',()=>{
+  const d=fixture();
+  d.cashEvents.push(event('major','2026-10-20',12000,{kind:'insurance'}));
+  const w=evaluate(d,'2026-10-12').warnings.find(x=>x.code==='CF01');
+  assert.ok(w);
+  assert.equal(w.level,'yellow');
+  assert.match(w.text,/估算|银行/);
+  d.baseline.financeAsOfDate='2026-08-01';
+  assert.equal(evaluate(d,'2026-10-12').warnings.find(x=>x.code==='CF01').level,'info');
 });
