@@ -184,7 +184,7 @@ function warningsFor(data,today) {
   }
   const recent = (data.checkIns ?? []).filter(x=>['market','light'].includes(x.type)).slice(-2);
   if (recent.length === 2 && recent.every(x=>x.waitReason?.trim())) w.push({code:'D03',level:'yellow',text:'连续两次选择再等等，看看等待是否真的能带来新的好处。'});
-  if (deriveEnergy(data.baseline?.energyFacts) === 'HIGH_RISK' || data.healthSafetyAffected) w.push({code:'E01',level:'yellow',text:'工作体验显示生活受到明显消耗，建议更早看看是否需要调整工作；并非医疗判断。'});
+  if (deriveEnergy(data.baseline?.energyFacts) === 'HIGH_RISK' || data.healthSafetyAffected) w.push({code:'E01',level:'yellow',text:'近期工作明显消耗精力，建议结合岗位成长、收入和求职进展，复查是否需要调整换工作节奏。'});
   const finance = (data.checkIns ?? []).filter(x=>x.type === 'finance').at(-1);
   if (finance && ['CashBalance','DebtBalance'].some(k=>finance['planned'+k] > 0 && nonnegative(finance[k[0].toLowerCase()+k.slice(1)]) && Math.abs(finance[k[0].toLowerCase()+k.slice(1)]-finance['planned'+k])/finance['planned'+k] > (data.config?.planVarianceWarningRate ?? 0.1))) w.push({code:'D02',level:'yellow',text:'收入和负债事实偏离原计划，需要复查。'});
   const premises = r.decisionPremises ?? [], invalid = premises.filter(x=>x.importance !== 'supporting' && x.status === 'invalid');
