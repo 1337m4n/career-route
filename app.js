@@ -320,8 +320,9 @@ function renderBaselineForm() {
   return `<p class="form-intro">只填今天能确认的信息。未知可以留空；通知期、未来搬迁和对方精确日期不阻止开始使用。</p><form id="baseline-form">
   ${formSection('1. 当前收入和负债',
     ['debtBalance','cashBalance','monthlyNetIncome','monthlyDebtPayment','monthlyLivingCost'].map((key,i)=>input(key,['全部负债余额','可用现金','月到手收入','每月还贷金额','基本生活支出'][i],b[key],{type:'number',min:0,step:'.01',help:'不知道可留空，不会被当作 0。'})).join('')+
-    input('oneOffCostsNext90Days','已明确知道的大额支出',b.oneOffCostsNext90Days,{type:'number',min:0,step:'.01',help:'只填已知；未来搬家等暂无依据的成本不用猜。'})+
-    certaintySelect('financeCertainty','以上这些数字有多确定？',b.certainty ?? 'confirmed'))}
+    input('oneOffCostsNext90Days','尚未分配日期的大额支出汇总',b.oneOffCostsNext90Days,{type:'number',min:0,step:'.01',help:'仅用作未排期提醒，不参与逐日预测。实际支出要在“资金计划”里录入日期，避免重复计算。'})+
+    input('financeAsOfDate','现金和债务数字实际对应哪一天？',b.financeAsOfDate ?? todayISO(),{type:'date',required:true,help:'此日期用于判断数据是否过期，不应自动填未来日期。'})+
+    certaintySelect('financeCertainty','以上这些数字有多确定？',b.certainty ?? 'unknown'))}
   <details><summary>补充工作、女朋友安排和奖金（可以以后再填）</summary>
   ${formSection('2. 工作成长情况',input('targetRoles','长期目标岗位',data.profile.targetRoles.join('、'),{full:true,help:'允许尚未确定。'})+careerFields(b.careerFacts,true)+textarea('careerEvidence','过去三个月的成长依据',b.careerEvidence,{help:'新技能、真实职责、到别的公司也用得上的成果；可以暂时未知。'})+careerOutput(b.careerFacts))}
   ${formSection('3. 最近两周体验',energyFields(b.energyFacts),'工作体验只用于提醒你复查职业路线，不会单独决定是否离职。')}
@@ -357,7 +358,9 @@ function renderFinanceForm() {
       input('monthlyNetIncome','本月到手收入',b.monthlyNetIncome,{type:'number',min:0,step:'.01',required:false})+
       input('monthlyDebtPayment','本月贷款月供',b.monthlyDebtPayment,{type:'number',min:0,step:'.01',required:false})+
       input('monthlyLivingCost','本月基本生活支出',b.monthlyLivingCost,{type:'number',min:0,step:'.01',required:false})+
-      input('oneOffCostsNext90Days','未来90天已知一次性支出',b.oneOffCostsNext90Days,{type:'number',min:0,step:'.01',required:false})+
+      input('oneOffCostsNext90Days','仍未分配日期的大额支出汇总',b.oneOffCostsNext90Days,{type:'number',min:0,step:'.01',help:'只显示提醒，不参与现金流时间轴；已在资金事件中录入的不要重复当作额外支出。'})+
+      input('financeAsOfDate','现金余额与月供实际对应的日期',b.financeAsOfDate??todayISO(),{type:'date',required:true})+
+      certaintySelect('financeCertainty','以上数据有多确定？',b.certainty??'unknown')+
       input('plannedCashBalance','原计划本月可用现金',null,{type:'number',min:0,step:'.01',help:'可留空；填写后系统检查实际偏差。'})+
       input('plannedDebtBalance','原计划本月负债余额',null,{type:'number',min:0,step:'.01',help:'可留空；填写后系统检查实际偏差。'})+
       textarea('financeNote','变化原因或备注','',{placeholder:'例如月供下降、房租、搬迁费用。'})+syncConfirmation('financial'))}
@@ -446,6 +449,7 @@ function renderOfferForm(o) {
       textarea('growthReason','岗位材料与成长依据',o.growthReason,{placeholder:'可以粘贴招聘说明，记录职责、用到的技术、能做出的成果。',help:'按你确认的五项情况计算分数。岗位文字和截图目前只作为参考资料。'})+
       input('startDate','预计入职日',o.startDate,{type:'date'})+
       input('responseDueDate','最晚答复日',o.responseDueDate,{type:'date'})+
+      input('firstPayDate','预计第一笔工资到账日',o.firstPayDate,{type:'date',help:'这里只记录日期，不自动把新岗位工资算成已到账现金。'})+
       select('canDelayStart','能否延后入职',String(o.canDelayStart ?? ''),[['true','可以协商'],['false','不能']],{})+
       textarea('risks','主要风险',o.risks,{placeholder:'例如试用期、业务稳定性、工作强度。'})+
       select('reversibility','若不合适，离开这份工作要付出的代价',o.reversibility,[['low','低'],['medium','中'],['high','高']],{}))}
@@ -526,7 +530,7 @@ function render() {
 function getForm(form) { return Object.fromEntries(new FormData(form)); }
 function saveBaseline(form) {
   const v=getForm(form),facts=careerValues(v);
-  Object.assign(data.baseline,Object.fromEntries(['debtBalance','cashBalance','monthlyNetIncome','monthlyDebtPayment','monthlyLivingCost','contractNoticeDays','bonusAmount'].map(key=>[key,num(v[key])])),{oneOffCostsNext90Days:num(v.oneOffCostsNext90Days) ?? 0,careerFacts:facts,currentRoleGrowth:deriveCareer(facts).score,careerEvidence:v.careerEvidence.trim(),certainty:v.financeCertainty,energyFacts:Object.fromEntries(['workAvoidance','lowMood','restRecovers','affectsLife','expensiveRecovery'].map(key=>[key,bool(v['energy_'+key])])),bonusPayDate:v.bonusPayDate || null});
+  Object.assign(data.baseline,Object.fromEntries(['debtBalance','cashBalance','monthlyNetIncome','monthlyDebtPayment','monthlyLivingCost','contractNoticeDays','bonusAmount'].map(key=>[key,num(v[key])])),{oneOffCostsNext90Days:num(v.oneOffCostsNext90Days) ?? 0,careerFacts:facts,currentRoleGrowth:deriveCareer(facts).score,careerEvidence:v.careerEvidence.trim(),certainty:v.financeCertainty,financeAsOfDate:v.financeAsOfDate,financeUpdatedAt:new Date().toISOString(),energyFacts:Object.fromEntries(['workAvoidance','lowMood','restRecovers','affectsLife','expensiveRecovery'].map(key=>[key,bool(v['energy_'+key])])),bonusPayDate:v.bonusPayDate || null});
   data.config.gdMinNetIncome=num(v.gdMinNetIncome);
   data.partnerPlan.sharedDestinationAligned=bool(v.sharedDestinationAligned);
   data.partnerPlan.nextRelationshipReviewAt=v.nextRelationshipReviewAt || null;
@@ -546,6 +550,7 @@ function saveMarket(form) {
 function saveFinance(form) {
   const v = getForm(form);
   const entry = { id:uid(), type:'finance', createdAt:new Date().toISOString(),
+    financeAsOfDate:v.financeAsOfDate,certainty:v.financeCertainty,
     debtBalance:num(v.debtBalance),cashBalance:num(v.cashBalance),monthlyNetIncome:num(v.monthlyNetIncome),
     monthlyDebtPayment:num(v.monthlyDebtPayment),monthlyLivingCost:num(v.monthlyLivingCost),
     oneOffCostsNext90Days:num(v.oneOffCostsNext90Days) ?? 0, plannedCashBalance:num(v.plannedCashBalance),
@@ -553,6 +558,9 @@ function saveFinance(form) {
   data.checkIns.push(entry);
   addFact('financial','更新当前收入和负债数值；未录入数值仍为未知。');
   for (const key of ['debtBalance','cashBalance','monthlyNetIncome','monthlyDebtPayment','monthlyLivingCost','oneOffCostsNext90Days']) data.baseline[key]=entry[key];
+  data.baseline.financeAsOfDate=v.financeAsOfDate;
+  data.baseline.financeUpdatedAt=new Date().toISOString();
+  data.baseline.certainty=v.financeCertainty;
   resolvePendingFacts(v,'financial');
   persistWithDecision('每月收入和负债反馈');
   showView('home');
@@ -589,9 +597,9 @@ function saveResign(form) {
 
 function saveOffer(form) {
   const v=getForm(form),existing=data.offers.find(o=>o.id === v.id),facts=careerValues(v),score=deriveCareer(facts);
-  const offer={...existing,id:v.id || uid(),company:v.company.trim(),city:v.city,role:v.role.trim(),workMode:v.workMode,status:v.status,grossIncome:num(v.grossIncome),monthlyNetIncome:num(v.monthlyNetIncome),monthlyLivingCost:num(v.monthlyLivingCost),bonusGuaranteed:num(v.bonusGuaranteed),probationRate:num(v.probationRate),probationMonths:num(v.probationMonths),probationNetIncome:num(v.probationNetIncome),monthlyCommuteCost:num(v.monthlyCommuteCost),relocationState:v.relocationState,switchingState:v.switchingState,relocationCost:v.relocationState === 'knownAmount' ? num(v.relocationCost):null,switchingCost:v.switchingState === 'knownAmount' ? num(v.switchingCost):null,careerFacts:facts,careerScore:score.score,careerAssessment:{...score,method:'observable-facts-v1',assessedAt:new Date().toISOString()},targetAligned:facts.targetFit,growthReason:v.growthReason.trim(),certainty:v.certainty,startDate:v.startDate || null,responseDueDate:v.responseDueDate || null,canDelayStart:bool(v.canDelayStart),risks:v.risks.trim(),reversibility:v.reversibility || null,bridgeExitDate:v.bridgeExitDate || null,gdSearchRestartDate:v.gdSearchRestartDate || null};
+  const offer={...existing,id:v.id || uid(),company:v.company.trim(),city:v.city,role:v.role.trim(),workMode:v.workMode,status:v.status,grossIncome:num(v.grossIncome),monthlyNetIncome:num(v.monthlyNetIncome),monthlyLivingCost:num(v.monthlyLivingCost),bonusGuaranteed:num(v.bonusGuaranteed),probationRate:num(v.probationRate),probationMonths:num(v.probationMonths),probationNetIncome:num(v.probationNetIncome),monthlyCommuteCost:num(v.monthlyCommuteCost),relocationState:v.relocationState,switchingState:v.switchingState,relocationCost:v.relocationState === 'knownAmount' ? num(v.relocationCost):null,switchingCost:v.switchingState === 'knownAmount' ? num(v.switchingCost):null,careerFacts:facts,careerScore:score.score,careerAssessment:{...score,method:'observable-facts-v1',assessedAt:new Date().toISOString()},targetAligned:facts.targetFit,growthReason:v.growthReason.trim(),certainty:v.certainty,startDate:v.startDate || null,responseDueDate:v.responseDueDate || null,firstPayDate:v.firstPayDate || null,updatedAt:new Date().toISOString(),canDelayStart:bool(v.canDelayStart),risks:v.risks.trim(),reversibility:v.reversibility || null,bridgeExitDate:v.bridgeExitDate || null,gdSearchRestartDate:v.gdSearchRestartDate || null};
   for (const key of ['relocation','switching']) if (offer[key+'State'] === 'knownAmount' && offer[key+'Cost'] == null) throw new Error('选择金额已知后，请填写对应金额；明确没有成本填 0。');
-  const critical=['status','company','city','role','workMode','grossIncome','bonusGuaranteed','monthlyNetIncome','monthlyLivingCost','startDate','probationRate','probationMonths','probationNetIncome','relocationCost','switchingCost'];
+  const critical=['status','company','city','role','workMode','grossIncome','bonusGuaranteed','monthlyNetIncome','monthlyLivingCost','startDate','firstPayDate','probationRate','probationMonths','probationNetIncome','relocationCost','switchingCost'];
   if (existing && critical.some(k=>existing[k] !== offer[k])) {offer.termsConfirmed=false;offer.pendingConditionsClear=false;}
   if (existing) Object.assign(existing,offer);else data.offers.push(offer);
   addFact('offer',(existing ? '机会条件更新：':'新增机会：')+offer.company+' / '+offer.role+' / '+offer.city,offer.certainty);
