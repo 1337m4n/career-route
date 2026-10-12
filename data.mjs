@@ -45,6 +45,9 @@ export function createInitialData() {
       monthlyDebtPayment: null,
       monthlyLivingCost: null,
       oneOffCostsNext90Days: 0,
+      financeAsOfDate: null,
+      financeUpdatedAt: null,
+      certainty: 'unknown',
       currentRoleGrowth: null,
       careerFacts: {},
       energyFacts: {},
@@ -66,6 +69,8 @@ export function createInitialData() {
       certainty: 'unknown',
     },
     offers: [],
+    cashEvents: [],
+    cashflowSettings: { salaryPayDay: null, incomePauseStart: null, incomePauseEnd: null },
     checkIns: [],
     facts: [],
     decisions: [],
@@ -134,6 +139,9 @@ export function validateData(data) {
   }
   if (data.schemaVersion === 1 && typeof data.currentState !== 'string') throw new Error('备份的去向状态无效。');
   if (data.schemaVersion === 2 && (!ROUTES.has(data.routeState) || !['GREEN','YELLOW','RED','BLOCKED'].includes(data.riskState))) throw new Error('备份的去向或风险状态无效。');
+  if (data.baseline.financeAsOfDate != null && !isDate(data.baseline.financeAsOfDate)) throw new Error('财务数据日期无效。');
+  if (data.baseline.financeUpdatedAt != null && !isDateTime(data.baseline.financeUpdatedAt)) throw new Error('财务保存时间无效。');
+  if (data.baseline.certainty != null && !CERTAINTIES.has(data.baseline.certainty)) throw new Error('财务数据确定程度无效。');
   for (const key of ["debtBalance", "cashBalance", "monthlyNetIncome", "monthlyDebtPayment", "monthlyLivingCost", "oneOffCostsNext90Days"]) {
     if (key in data.baseline && !isMoney(data.baseline[key])) throw new Error(`备份的 ${key} 金额无效。`);
   }
@@ -169,6 +177,35 @@ export function validateData(data) {
   for (const entry of data.decisionHistory) {
     if (!isOptionalDateTime(entry.at) || ['reasons','warnings','blockers'].some(key => entry[key] != null && (!Array.isArray(entry[key]) || !entry[key].every(isIssue)))) throw new Error('备份的判断历史无效。');
   }
+  const cashSettings = data.cashflowSettings ?? {};
+  if (!isObject(cashSettings) ||
+      (cashSettings.salaryPayDay != null && (!Number.isInteger(cashSettings.salaryPayDay) || cashSettings.salaryPayDay < 1 || cashSettings.salaryPayDay > 31)) ||
+      !isOptionalDate(cashSettings.incomePauseStart) || !isOptionalDate(cashSettings.incomePauseEnd) ||
+      (cashSettings.incomePauseEnd && (!cashSettings.incomePauseStart || cashSettings.incomePauseEnd < cashSettings.incomePauseStart))) {
+    throw new Error('现金流的发薪日或收入空档日期无效。');
+  }
+  const cashEvents = data.cashEvents ?? [];
+  const cashKinds = new Set(['insurance','rent','bonus','offer','first_pay','moving','other']);
+  if (!Array.isArray(cashEvents) || cashEvents.length > 200) throw new Error('资金事件数量无效。');
+  const seenEventIds = new Set();
+  for (const e of cashEvents) {
+    if (!isObject(e) || typeof e.id !== 'string' || e.id.length < 1 || e.id.length > 128 || seenEventIds.has(e.id) ||
+        typeof e.label !== 'string' || !e.label.trim() || e.label.length > 160 || !cashKinds.has(e.kind) ||
+        !isDate(e.date) || (e.endDate != null && (!isDate(e.endDate) || e.endDate < e.date)) ||
+        !['in','out','milestone'].includes(e.direction) ||
+        !['extra','living','debt','milestone'].includes(e.impact) ||
+        (e.direction === 'milestone') !== (e.impact === 'milestone') ||
+        (e.impact === 'living' || e.impact === 'debt') && (e.direction !== 'out' || !(e.recurrenceMonths > 0)) ||
+        !(e.amount == null || isMoney(e.amount)) ||
+        (e.certainty === 'confirmed' && e.direction !== 'milestone' && e.amount == null) ||
+        !CERTAINTIES.has(e.certainty) ||
+        ![0,1,3,6,12].includes(e.recurrenceMonths ?? 0) ||
+        !isOptionalDateTime(e.completedAt) ||
+        (e.note != null && (typeof e.note !== 'string' || e.note.length > 1000))) {
+      throw new Error('资金事件包含无效金额、日期或类型。');
+    }
+    seenEventIds.add(e.id);
+  }
   for (const offer of data.offers) {
     if ("status" in offer && !["none", "verbal", "written", "accepted"].includes(offer.status)) {
       throw new Error("备份的 招聘进展无效。");
@@ -179,7 +216,8 @@ export function validateData(data) {
     if (offer.probationRate != null && (!isMoney(offer.probationRate) || offer.probationRate > 100)) throw new Error('备份的试用期工资比例无效。');
     for (const key of ['targetAligned','termsConfirmed','pendingConditionsClear','noticeAgreementConfirmed','canDelayStart']) if (offer[key] != null && typeof offer[key] !== 'boolean') throw new Error('备份的 Offer 确认事实无效。');
     if ("careerScore" in offer && !isScore(offer.careerScore)) throw new Error("备份的 Offer 成长评分无效。");
-    for (const key of ['startDate','responseDueDate','bridgeExitDate','gdSearchRestartDate']) if (offer[key] != null && offer[key] !== '' && !isDate(offer[key])) throw new Error(`备份的 Offer ${key} 日期无效。`);
+    for (const key of ['startDate','responseDueDate','bridgeExitDate','gdSearchRestartDate','firstPayDate']) if (offer[key] != null && offer[key] !== '' && !isDate(offer[key])) throw new Error(`备份的 Offer ${key} 日期无效。`);
+    if (offer.updatedAt != null && !isDateTime(offer.updatedAt)) throw new Error('备份的岗位更新时间无效。');
     if ('careerFacts' in offer && !isFacts(offer.careerFacts)) throw new Error('备份的工作成长情况无效。');
     if ("sixMonthNetGain" in offer && offer.sixMonthNetGain !== null && !Number.isFinite(offer.sixMonthNetGain)) {
       throw new Error("备份的 Offer 六个月净改善无效。");
@@ -219,7 +257,9 @@ export function validateData(data) {
     baseline: { ...defaults.baseline, ...data.baseline },
     partnerPlan: { ...defaults.partnerPlan, ...data.partnerPlan },
     routeDecision: { ...defaults.routeDecision, ...data.routeDecision },
-    config: { ...defaults.config, ...data.config, checkpointOverrides, checkpointCompletions } };
+    config: { ...defaults.config, ...data.config, checkpointOverrides, checkpointCompletions },
+    cashflowSettings: { ...defaults.cashflowSettings, ...cashSettings },
+    cashEvents };
   delete result.currentState;
   if (!ROUTES.has(result.routeState)) throw new Error('备份的去向状态无效。');
   if (!Array.isArray(result.routeDecision.decisionPremises) || result.routeDecision.decisionPremises.some(p => !isObject(p) || typeof p.text !== 'string' || !['valid','partially_valid','invalid','unknown'].includes(p.status) || !isOptionalDate(p.reviewedAt))) throw new Error('备份的决策条件无效。');

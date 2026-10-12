@@ -3,11 +3,12 @@ import { downloadCalendar } from './reminders.mjs';
 import { evaluate, validateBaseline, qualifyGuangdongOffer, qualifyShanghaiOffer, routeTendencies, deriveCareer, deriveEnergy, CAREER_WEIGHTS, financialCapacity, resignBlockers, addMonths, bridgeRenewalErrors } from './rules.mjs';
 
 import { encryptBackup, decodeBackup } from './crypto.mjs';
+import { projectCashflow, financeSnapshot, expandCashEvents, CASH_EVENT_TYPES, CASH_CERTAINTIES, CASH_IMPACTS } from './cashflow.mjs';
 
 const app = document.querySelector('#app');
 const toast = document.querySelector('#toast');
 const insecureOrigin = !window.isSecureContext;
-const VIEWS = new Set(['home', 'feedback', 'offers', 'timeline', 'history', 'settings']);
+const VIEWS = new Set(['home', 'cashflow', 'feedback', 'offers', 'timeline', 'history', 'settings']);
 const FEEDBACK_TABS = ['baseline', 'market', 'finance', 'offer', 'relationship', 'major', 'resign', 'progress', 'light'];
 const STATE_LABELS = {
   BASELINE_SETUP: '先填收入和负债', MARKET_TESTING: '在广东和上海投简历', HOLD_AND_SEARCH: '继续上班，同时投简历',
@@ -22,6 +23,7 @@ let dataError = null;
 let currentView = 'home';
 let feedbackTab = '';
 let editingOfferId = null;
+let editingCashEventId = null;
 let toastTimer;
 
 try { if (insecureOrigin) throw new Error('个人数据只能在 HTTPS 或本机安全预览中使用。'); data = loadData(); } catch (error) { dataError = error; data = createInitialData(); }
@@ -126,6 +128,30 @@ function renderFiveQuestions(d) {
   const syncTargets={financial:['更新收入和负债','feedback','finance'],offer:['更新岗位信息','offers',null],career:['更新工作情况','feedback','baseline'],energy:['更新工作感受','feedback','baseline'],relationship:['更新女朋友的安排','feedback','relationship']};
   const pendingLinks=[...new Set(pending.map(item=>item.factType))].map(type=>syncTargets[type]).filter(Boolean).map(([label])=>label).join('、');
   const pendingNote=pending.length ? `<div class="inline-alert">有 ${pending.length} 条旧记录只写了文字，具体数字或安排还没更新。请从“更新近况”进入对应内容：${pendingLinks}</div>`:'';
+  const fresh=financeSnapshot(data,todayISO()), forecast=projectCashflow(data,todayISO());
+  const verifiedSnapshot=fresh.certainty === 'confirmed' && fresh.status === 'fresh';
+  const certainFacts=verifiedSnapshot ? `现金 ${money(current.cashBalance)}、月到手 ${money(current.monthlyNetIncome)}（${dateLabel(fresh.date)}用户核对）` :
+    '尚无近期已核对的完整财务基准';
+  const estimatedFacts=[`月供＋生活费根据月度预算估算：${money(d.finance.required)}`];
+  if(forecast.available)estimatedFacts.push(`未来30天谨慎最低现金估算：${money(forecast.periods[0].cautiousLowest)}`);
+  const maybeIncome=forecast.events.filter(e=>e.direction==='in'&&e.certainty!=='confirmed').slice(0,2);
+  if(maybeIncome.length)estimatedFacts.push(`尚未确认的预计收入：${maybeIncome.map(e=>e.label+' '+money(e.amount)).join('、')}（仅纳入情景）`);
+  const activeOffer=selected??data.offers.at(-1);
+  if(activeOffer){
+    if(['written','accepted'].includes(activeOffer.status) && activeOffer.certainty==='confirmed'){
+      certainFacts += `；已录入书面岗位信息：${activeOffer.company||'未命名岗位'}（${activeOffer.updatedAt ? dateLabel(activeOffer.updatedAt) : '核实日未记录'}）`;
+    }else estimatedFacts.push(`岗位机会：${activeOffer.company||'未命名岗位'}（${CASH_CERTAINTIES[activeOffer.certainty]||'未核实'}，不能当作录用）`);
+  }
+  const waitingFacts=[
+    ...(fresh.status!=='fresh' ? ['可用现金最近的实际日期与金额'] : []),
+    ...(forecast.issues.length ? forecast.issues.slice(0,2) : []),
+    ...((data.offers??[]).some(o=>o.firstPayDate) ? ['新岗位首薪实际金额与到账情况'] : [])
+  ];
+  const decisionEvidence=`<details class="evidence-details"><summary>判断依据：已确认、估算与待确认</summary><div class="evidence-groups">
+    <p><strong>已确认</strong> ${escapeHTML(certainFacts)}</p>
+    <p><strong>估算 / 假设</strong> ${estimatedFacts.map(escapeHTML).join('；')}</p>
+    <p><strong>待确认</strong> ${waitingFacts.length ? waitingFacts.map(escapeHTML).join('；'):'当前未列出新的待确认项'}</p>
+  </div><button class="text-link" type="button" data-view="cashflow">查看现金流计算细节</button></details>`;
   const snapshot=`<p class="question-note">目前保存的数据：现金 ${money(current.cashBalance)} · 负债 ${money(current.debtBalance)} · 每月剩余 ${money(d.finance.monthlyBalance)}${focusOffer ? `；${selected ? '已选':'最新录入'}机会 ${escapeHTML(focusOffer.city)} / 到手 ${money(focusOffer.monthlyNetIncome)}`:''}；你和女朋友想去的地方${data.partnerPlan.sharedDestinationAligned === true ? '一致':data.partnerPlan.sharedDestinationAligned === false ? '未一致':'未确认'}。</p>`;
   const signals=[...d.blockers,...d.warnings.filter(w=>['yellow','red'].includes(w.level))];
   const driftResult=!baselineReady ? '资料不足，不能判定是否偏离原计划':d.requiresRedecision ? '需要重新考虑原来的选择':d.blockers.length ? '还有条件没确认好，暂不建议提离职':signals.length ? '有几件事需要留意':'目前没有发现明显偏离原计划';
@@ -135,7 +161,7 @@ function renderFiveQuestions(d) {
     <article><h3>2. 当初为什么这样选？</h3>${reasons}</article>
     <article><h3>3. 当初的条件现在还成立吗？</h3>${premises}${uncertainty}${r.manualOverride ? `<p class="question-note">例外理由于 ${dateLabel(r.manualOverride.nextReviewAt)} 复查。</p>`:''}</article>
     <article><h3>4. 最近有什么变化？</h3><p class="question-result">${latest.length ? `最近记录 ${latest.length} 条变化`:'尚无新变化记录'}</p>${facts}${pendingNote}${snapshot}</article>
-    <article><h3>5. 我的计划有没有走偏？</h3><p class="question-result">${driftResult}</p>${!baselineReady ? '<p>先补齐现金、负债、收入和必要支出，暂不作“没有偏离原计划”的结论。</p>':signals.length ? `<ul class="plain-list">${signals.slice(0,3).map(x=>`<li>${escapeHTML(x.text)}</li>`).join('')}</ul>`:'<p>目前没有发现必须重新选择的情况，按时更新近况就好。</p>'}${difference}<p class="question-next">下一步：${escapeHTML(nextAction)}</p></article>
+    <article><h3>5. 我的计划有没有走偏？</h3><p class="question-result">${driftResult}</p>${!baselineReady ? '<p>先补齐现金、负债、收入和必要支出，暂不作“没有偏离原计划”的结论。</p>':signals.length ? `<ul class="plain-list">${signals.slice(0,3).map(x=>`<li>${escapeHTML(x.text)}</li>`).join('')}</ul>`:'<p>目前没有发现必须重新选择的情况，按时更新近况就好。</p>'}${difference}${decisionEvidence}<p class="question-next">下一步：${escapeHTML(nextAction)}</p></article>
   </div><details><summary>匹配分数与资料完整度怎么算？</summary><p>匹配分数权重：招聘进展占 20%，工作成长占 25%，收入能否覆盖开支占 20%，城市和时间安排占 20%，是否满足选择条件占 15%。资料完整度表示工资、开支、招聘进展、工作成长、换工作费用、试用期和双方安排等 7 类资料填了多少。</p></details>`);
 }
 function renderLightForm() {
@@ -175,6 +201,7 @@ function renderHome() {
   return pageHeader('今天的判断', '基于事实，做更适合自己的选择') +
     `<section class="section hero-grid">${hero}</section>` +
     renderFiveQuestions(decision) +
+    renderCashflowPreview() +
     section('接下来要记住的日期', `<p>下次近况检查：${dateLabel(decision.nextCheckAt)}（${relativeDue(decision.nextCheckAt)}）${nextCheckpoint() ? ` · 下一计划节点：${dateLabel(nextCheckpoint().date)}` : ''}</p>${renderTimelineRail()}<button type="button" class="text-link" data-view="timeline">查看全部节点与完成记录</button>`, '计划日期不代表任务已完成；完成情况以保存的记录为准。') +
     `<section class="section"><details><summary>查看收入、负债和每月剩余的钱</summary>${renderFinanceSummary()}</details></section>`;
 }
@@ -213,9 +240,81 @@ function renderTimelineRail() {
     </div>`;
   }).join('')}</div>`;
 }
+
+function financeFreshnessText() {
+  const snapshot=financeSnapshot(data,todayISO());
+  const labels={fresh:'近期已更新',aging:'超过7天未核对',stale:'超过30天未核对',unknown:'尚无更新日期',future:'数据日期需核查'};
+  return `${snapshot.date ? dateLabel(snapshot.date):'日期未知'} · ${labels[snapshot.status]}${snapshot.age!=null&&snapshot.age>=0 ? '（'+snapshot.age+'天前）':''} · ${CASH_CERTAINTIES[snapshot.certainty]||'确定程度未知'}`;
+}
+function renderCashflowPreview() {
+  const projection=projectCashflow(data,todayISO());
+  if(!projection.available)return section('未来资金情况',
+    `<p class="cash-muted">30/60/90天预测资料不完整：${escapeHTML(projection.missing.join('、'))}。未知金额不会自动按0元计算。</p><button class="text-link" type="button" data-view="cashflow">补齐资金计划</button>`);
+  const first=projection.periods[0];
+  const risk=first.firstDeficit ? `按谨慎口径，预计${dateLabel(first.firstDeficit)}前后可能出现缺口` : '未来30天未发现模型内的现金负数';
+  return section('未来资金情况',`<div class="cash-preview"><div><strong>${escapeHTML(risk)}</strong><p>30天谨慎最低余额：${money(first.cautiousLowest)}。这是按已录入数据估算，不是银行还款日承诺。</p></div><button class="btn btn-secondary" type="button" data-view="cashflow">查看30/60/90天预测和事件</button></div>
+  <p class="note">财务数据：${escapeHTML(financeFreshnessText())}。<span class="muted">尚未确认的奖金不计入谨慎余额。</span></p>`);
+}
+function renderCashflow() {
+  const today=todayISO(), b=data.baseline, projection=projectCashflow(data,today), cfg=data.cashflowSettings ?? {};
+  const cards=projection.available ? `<div class="forecast-grid">${projection.periods.map(p=>`<article class="forecast-card ${p.status==='shortfall' ? 'shortfall':''}">
+    <h3>未来${p.days}天</h3>
+    <strong>${money(p.cautiousEnd)}</strong>
+    <p>谨慎期末余额</p>
+    <dl><div><dt>期间最低</dt><dd>${money(p.cautiousLowest)}</dd></div>
+      <div><dt>最多需补现金</dt><dd>${money(p.gap)}</dd></div>
+      <div><dt>首次缺口</dt><dd>${p.firstDeficit ? escapeHTML(shortDate(p.firstDeficit)):'未发现'}</dd></div>
+      <div><dt>计入估计收入后</dt><dd>${money(p.scenarioEnd)}</dd></div></dl>
+  </article>`).join('')}</div>`:
+    `<div class="inline-alert">目前缺少${escapeHTML(projection.missing.join('、'))}，不能生成金额预测。先在“更新近况”补充缺失数字。</div>`;
+  const warn=projection.issues.length ? `<details class="cash-issues" open><summary>本次预测需要留意的 ${projection.issues.length} 项</summary><ul class="plain-list">${projection.issues.map(x=>`<li>${escapeHTML(x)}</li>`).join('')}</ul></details>` : '';
+  const eventRows=projection.events.map(e=>`<tr><td><strong>${escapeHTML(e.label)}</strong><small>${escapeHTML(CASH_EVENT_TYPES[e.kind]||'其他')} ${e.virtual ? e.origin==='baseline'?'· 来自基本资料':'· 来自岗位记录':''}</small></td>
+    <td>${escapeHTML(dateLabel(e.date))}</td>
+    <td class="num">${e.direction==='milestone'?'只提醒':(e.direction==='in'?'+':'−')+money(e.amount)}</td>
+    <td>${escapeHTML(CASH_CERTAINTIES[e.certainty]||'未知')}<small>${escapeHTML(CASH_IMPACTS[e.impact]||'只提醒')}</small></td>
+    <td>${e.virtual ? (e.origin==='baseline'?'到“更新近况”修改':'到“岗位比较”修改') : `<button class="text-link" type="button" data-action="edit-cash-event" data-id="${escapeHTML(e.originId)}">编辑</button>`}</td></tr>`).join('');
+  const savedEvents=(data.cashEvents ?? []).map(e=>`<li><span>${escapeHTML(e.label)} · ${escapeHTML(dateLabel(e.date))}${e.recurrenceMonths ? ' · 每'+e.recurrenceMonths+'个月':''}${e.completedAt?' · 已完成':''}</span>
+      <span><button class="text-link" type="button" data-action="edit-cash-event" data-id="${escapeHTML(e.id)}">修改</button>
+      ${!e.recurrenceMonths&&!e.completedAt ? `<button class="text-link" type="button" data-action="finish-cash-event" data-id="${escapeHTML(e.id)}">已支付 / 完成</button>`:''}
+      <button class="text-link error-note" type="button" data-action="delete-cash-event" data-id="${escapeHTML(e.id)}">删除</button></span></li>`).join('');
+  const e=(data.cashEvents ?? []).find(x=>x.id===editingCashEventId)||{};
+  const eventForm=`<form id="cash-event-form"><input type="hidden" name="id" value="${escapeHTML(e.id||'')}"/>
+    ${formSection(editingCashEventId?'修改资金事件':'新增一笔资金事件',
+      select('kind','事件类型',e.kind??'insurance',Object.entries(CASH_EVENT_TYPES),{required:true})+
+      input('label','事项名称',e.label,{required:true,placeholder:'例如季度房租、续保、奖金'})+
+      input('date','预计发生日期',e.date,{type:'date',required:true})+
+      select('direction','对现金的影响',e.direction??'out',[['out','支出'],['in','收入'],['milestone','只提醒，不计算金额']],{required:true})+
+      input('amount','金额（未知可留空）',e.amount,{type:'number',min:0,step:'.01',help:'金额尚不确定可留空，系统会提示预测不完整。'})+
+      certaintySelect('certainty','金额或日期有多确定？',e.certainty??'rough')+
+      select('impact','如何计入预算',e.impact??'extra',Object.entries(CASH_IMPACTS),{required:true,help:'如果房租已经算在基本生活费里，选择“包含在日常生活预算中”，并填写真实重复周期。'})+
+      select('recurrenceMonths','多久发生一次',String(e.recurrenceMonths??0),[['0','仅一次'],['1','每月'],['3','每3个月'],['6','每6个月'],['12','每12个月']],{required:true})+
+      input('endDate','重复到哪一天（可空）',e.endDate,{type:'date'})+
+      textarea('note','备注、资金来源或待确认事项',e.note,{placeholder:'例如奖金预计在房租前发放，但税后金额仍需确认。'}))}
+    ${formActions(editingCashEventId?'保存资金事件修改':'保存资金事件')}
+    ${editingCashEventId?'<button class="text-link" type="button" data-action="cancel-cash-edit">取消修改</button>':''}
+  </form>`;
+  const settings=`<form id="cashflow-settings-form">${formSection('现金流计算方式',
+    select('salaryPayDay','现有工作的每月发薪日',cfg.salaryPayDay??'',
+      Array.from({length:31},(_,i)=>[String(i+1),'每月'+(i+1)+'日']),{help:'未知可空；未知时工资按日均摊，无法反映发薪日前的真实紧张程度。'})+
+    input('incomePauseStart','预计开始没有工资的日期（可空）',cfg.incomePauseStart,{type:'date'})+
+    input('incomePauseEnd','预计恢复正常工资的日期（可空）',cfg.incomePauseEnd,{type:'date',help:'仅在收入空档已能合理估计时填写；新工资数额变了仍需更新月到手。'}))}
+    ${formActions('保存计算设置')}</form>`;
+  return pageHeader('资金计划','用已知事实管理未来30、60、90天')+
+    section('资金安全边界',`<p class="section-lead">现金余额来自你最后一次保存的记录：${money(b.cashBalance)}。<strong>${escapeHTML(financeFreshnessText())}</strong>。</p>
+      ${cards}${warn}<p class="note">模型默认工资持续、月供和生活费按日均摊。还款日逐笔分散时，真实余额可能比预测更早不足；不能据此承诺一定不会逾期。已出账 / 已支付金额应及时更新可用现金。</p>
+      <button class="text-link" type="button" data-view="feedback" data-tab="finance">更新现金、工资和月供</button>`)+
+    section('即将发生的资金事件',`<p class="section-lead">车险、季度房租、奖金、搬迁和入职首薪可逐项记账。Offer和首薪日期默认只作提醒，不自动当作已经到账的收入。</p>
+      ${eventRows ? `<div class="offer-table-wrap"><table class="offer-table cash-table"><thead><tr><th>事项</th><th>日期</th><th>金额</th><th>依据</th><th>修改</th></tr></thead><tbody>${eventRows}</tbody></table></div>` : '<p class="empty">未来90天还没有已录入的资金事件。</p>'}
+      ${savedEvents ? `<details><summary>管理手动记录的事项（包含90天以外）</summary><ul class="cash-manage-list">${savedEvents}</ul></details>`:''}
+      ${eventForm}`)+
+    section('工资与收入空档',settings)+
+    section('计算依据',`<ol class="plain-list">${(projection.assumptions??[]).map(a=>`<li>${escapeHTML(a)}</li>`).join('')}</ol>
+      <p class="note">“谨慎余额”排除未确认的额外收入；“计入估计收入后”只是情景推演，不代表奖金或新工资已经到账。</p>`);
+}
+
 function renderFinanceSummary() {
   const b=data.baseline, f=financialCapacity(data);
-  return `<dl class="metric-list"><div><dt>月到手</dt><dd>${money(b.monthlyNetIncome)}</dd></div><div><dt>月供 + 基本生活</dt><dd>${money(f.required)}</dd></div><div><dt>每月剩余</dt><dd class="${f.monthlyBalance < 0 ? 'negative':''}">${money(f.monthlyBalance)}</dd></div><div><dt>如果一个月没工资</dt><dd>${{UNKNOWN:'信息不足',COVERED:'可覆盖',TIGHT:'紧张',UNAFFORDABLE:'无法覆盖'}[f.stress]}</dd></div></dl><p class="note">扣除已知大额支出后检查必要开支承受能力，这只能帮助你看备用现金够不够，提离职前还要确认岗位和交接条件。</p>`;
+  return `<p class="note">最近财务数据：${escapeHTML(financeFreshnessText())}。建议核对是否已经发生新的还款、奖金或车险支出。</p><dl class="metric-list"><div><dt>月到手</dt><dd>${money(b.monthlyNetIncome)}</dd></div><div><dt>月供 + 基本生活</dt><dd>${money(f.required)}</dd></div><div><dt>每月剩余</dt><dd class="${f.monthlyBalance < 0 ? 'negative':''}">${money(f.monthlyBalance)}</dd></div><div><dt>如果一个月没工资</dt><dd>${{UNKNOWN:'信息不足',COVERED:'可覆盖',TIGHT:'紧张',UNAFFORDABLE:'无法覆盖'}[f.stress]}</dd></div></dl><p class="note">扣除已知大额支出后检查必要开支承受能力，这只能帮助你看备用现金够不够，提离职前还要确认岗位和交接条件。</p>`;
 }
 
 function renderFeedback() {
@@ -229,8 +328,9 @@ function renderBaselineForm() {
   return `<p class="form-intro">只填今天能确认的信息。未知可以留空；通知期、未来搬迁和对方精确日期不阻止开始使用。</p><form id="baseline-form">
   ${formSection('1. 当前收入和负债',
     ['debtBalance','cashBalance','monthlyNetIncome','monthlyDebtPayment','monthlyLivingCost'].map((key,i)=>input(key,['全部负债余额','可用现金','月到手收入','每月还贷金额','基本生活支出'][i],b[key],{type:'number',min:0,step:'.01',help:'不知道可留空，不会被当作 0。'})).join('')+
-    input('oneOffCostsNext90Days','已明确知道的大额支出',b.oneOffCostsNext90Days,{type:'number',min:0,step:'.01',help:'只填已知；未来搬家等暂无依据的成本不用猜。'})+
-    certaintySelect('financeCertainty','以上这些数字有多确定？',b.certainty ?? 'confirmed'))}
+    input('oneOffCostsNext90Days','尚未分配日期的大额支出汇总',b.oneOffCostsNext90Days,{type:'number',min:0,step:'.01',help:'仅用作未排期提醒，不参与逐日预测。实际支出要在“资金计划”里录入日期，避免重复计算。'})+
+    input('financeAsOfDate','现金和债务数字实际对应哪一天？',b.financeAsOfDate ?? todayISO(),{type:'date',required:true,help:'此日期用于判断数据是否过期，不应自动填未来日期。'})+
+    certaintySelect('financeCertainty','以上这些数字有多确定？',b.certainty ?? 'unknown'))}
   <details><summary>补充工作、女朋友安排和奖金（可以以后再填）</summary>
   ${formSection('2. 工作成长情况',input('targetRoles','长期目标岗位',data.profile.targetRoles.join('、'),{full:true,help:'允许尚未确定。'})+careerFields(b.careerFacts,true)+textarea('careerEvidence','过去三个月的成长依据',b.careerEvidence,{help:'新技能、真实职责、到别的公司也用得上的成果；可以暂时未知。'})+careerOutput(b.careerFacts))}
   ${formSection('3. 最近两周体验',energyFields(b.energyFacts),'工作体验只用于提醒你复查职业路线，不会单独决定是否离职。')}
@@ -266,7 +366,9 @@ function renderFinanceForm() {
       input('monthlyNetIncome','本月到手收入',b.monthlyNetIncome,{type:'number',min:0,step:'.01',required:false})+
       input('monthlyDebtPayment','本月贷款月供',b.monthlyDebtPayment,{type:'number',min:0,step:'.01',required:false})+
       input('monthlyLivingCost','本月基本生活支出',b.monthlyLivingCost,{type:'number',min:0,step:'.01',required:false})+
-      input('oneOffCostsNext90Days','未来90天已知一次性支出',b.oneOffCostsNext90Days,{type:'number',min:0,step:'.01',required:false})+
+      input('oneOffCostsNext90Days','仍未分配日期的大额支出汇总',b.oneOffCostsNext90Days,{type:'number',min:0,step:'.01',help:'只显示提醒，不参与现金流时间轴；已在资金事件中录入的不要重复当作额外支出。'})+
+      input('financeAsOfDate','现金余额与月供实际对应的日期',b.financeAsOfDate??todayISO(),{type:'date',required:true})+
+      certaintySelect('financeCertainty','以上数据有多确定？',b.certainty??'unknown')+
       input('plannedCashBalance','原计划本月可用现金',null,{type:'number',min:0,step:'.01',help:'可留空；填写后系统检查实际偏差。'})+
       input('plannedDebtBalance','原计划本月负债余额',null,{type:'number',min:0,step:'.01',help:'可留空；填写后系统检查实际偏差。'})+
       textarea('financeNote','变化原因或备注','',{placeholder:'例如月供下降、房租、搬迁费用。'})+syncConfirmation('financial'))}
@@ -355,6 +457,7 @@ function renderOfferForm(o) {
       textarea('growthReason','岗位材料与成长依据',o.growthReason,{placeholder:'可以粘贴招聘说明，记录职责、用到的技术、能做出的成果。',help:'按你确认的五项情况计算分数。岗位文字和截图目前只作为参考资料。'})+
       input('startDate','预计入职日',o.startDate,{type:'date'})+
       input('responseDueDate','最晚答复日',o.responseDueDate,{type:'date'})+
+      input('firstPayDate','预计第一笔工资到账日',o.firstPayDate,{type:'date',help:'这里只记录日期，不自动把新岗位工资算成已到账现金。'})+
       select('canDelayStart','能否延后入职',String(o.canDelayStart ?? ''),[['true','可以协商'],['false','不能']],{})+
       textarea('risks','主要风险',o.risks,{placeholder:'例如试用期、业务稳定性、工作强度。'})+
       select('reversibility','若不合适，离开这份工作要付出的代价',o.reversibility,[['low','低'],['medium','中'],['high','高']],{}))}
@@ -385,9 +488,15 @@ function renderTimeline() {
       </div></li>`;
   }).join('')}</ol>`;
   const bridge = data.routeDecision?.bridgeExitDate ? `<div class="inline-alert spaced-top">你的上海过渡计划：${escapeHTML(dateLabel(data.routeDecision.gdSearchRestartDate))} 重新投广东岗位；${escapeHTML(dateLabel(data.routeDecision.bridgeExitDate))} 做强制重新决定下一步。实际入职后的六个月上限仍需单独检查。</div>` : '';
+  const moneyEvents=expandCashEvents(data,today,90).slice(0,8);
+  const moneySchedule=moneyEvents.length ? moneyEvents.map(e=>`<li><time datetime="${escapeHTML(e.date)}">${escapeHTML(shortDate(e.date))}</time>
+     <span>${escapeHTML(e.label)} · ${escapeHTML(CASH_CERTAINTIES[e.certainty]||'未知')}${e.direction==='milestone'?' · 仅提醒':` · ${e.direction==='in'?'+':'−'}${money(e.amount)}`}</span></li>`).join('') :
+     '<li>还没有录入未来90天的资金事件。</li>';
   return pageHeader('重要日期', '关键节点提醒') + section('2026 年 9 月 — 2027 年 6 月', `<div class="btn-row calendar-actions"><button type="button" class="btn btn-primary" data-action="export-calendar">下载提醒，导入手机日历</button></div>
   <p class="note">对已经完成的事项填写实际日期（允许提前完成），点击“标记完成”。系统会保存对勾和日期，刷新后仍有效；仅到日期不会自动算作完成。</p>
-  ${list}${bridge}<p class="note">重新下载的日历会排除已完成节点；此前导入的日历事件不会自动删除。个人数据只保存在当前浏览器。</p>`);
+  ${list}${bridge}<p class="note">重新下载的日历会排除已完成节点；此前导入的日历事件不会自动删除。个人数据只保存在当前浏览器。</p>`) +
+    section('未来90天资金事件',`<ul class="cash-date-list">${moneySchedule}</ul>
+      <button class="text-link" type="button" data-view="cashflow">查看金额、确定程度和资金预测</button>`);
 }
 function renderHistory() {
   const formal=[...data.decisions].reverse(),history=[...data.decisionHistory].reverse();
@@ -427,15 +536,16 @@ function render() {
     if (active) button.setAttribute('aria-current','page'); else button.removeAttribute('aria-current');
   });
   if (dataError) { renderRecovery(); return; }
-  const pages = { home: renderHome, feedback: renderFeedback, offers: renderOffers, timeline: renderTimeline, history: renderHistory, settings: renderSettings };
+  const pages = { home: renderHome, cashflow: renderCashflow, feedback: renderFeedback, offers: renderOffers, timeline: renderTimeline, history: renderHistory, settings: renderSettings };
   app.innerHTML = pages[currentView]();
-  document.title = `${{home:'今日判断',feedback:'更新近况',offers:'岗位比较',timeline:'重要日期',history:'我的记录',settings:'设置与数据'}[currentView]} · 工作与搬家计划`;
+  document.title = `${{home:'今日判断',cashflow:'资金计划',feedback:'更新近况',offers:'岗位比较',timeline:'重要日期',history:'我的记录',settings:'设置与数据'}[currentView]} · 工作与搬家计划`;
 }
 
 function getForm(form) { return Object.fromEntries(new FormData(form)); }
 function saveBaseline(form) {
   const v=getForm(form),facts=careerValues(v);
-  Object.assign(data.baseline,Object.fromEntries(['debtBalance','cashBalance','monthlyNetIncome','monthlyDebtPayment','monthlyLivingCost','contractNoticeDays','bonusAmount'].map(key=>[key,num(v[key])])),{oneOffCostsNext90Days:num(v.oneOffCostsNext90Days) ?? 0,careerFacts:facts,currentRoleGrowth:deriveCareer(facts).score,careerEvidence:v.careerEvidence.trim(),certainty:v.financeCertainty,energyFacts:Object.fromEntries(['workAvoidance','lowMood','restRecovers','affectsLife','expensiveRecovery'].map(key=>[key,bool(v['energy_'+key])])),bonusPayDate:v.bonusPayDate || null});
+  if(!isDate(v.financeAsOfDate)||v.financeAsOfDate>todayISO())throw new Error('财务数字的实际日期不能晚于今天。');
+  Object.assign(data.baseline,Object.fromEntries(['debtBalance','cashBalance','monthlyNetIncome','monthlyDebtPayment','monthlyLivingCost','contractNoticeDays','bonusAmount'].map(key=>[key,num(v[key])])),{oneOffCostsNext90Days:num(v.oneOffCostsNext90Days) ?? 0,careerFacts:facts,currentRoleGrowth:deriveCareer(facts).score,careerEvidence:v.careerEvidence.trim(),certainty:v.financeCertainty,financeAsOfDate:v.financeAsOfDate,financeUpdatedAt:new Date().toISOString(),energyFacts:Object.fromEntries(['workAvoidance','lowMood','restRecovers','affectsLife','expensiveRecovery'].map(key=>[key,bool(v['energy_'+key])])),bonusPayDate:v.bonusPayDate || null});
   data.config.gdMinNetIncome=num(v.gdMinNetIncome);
   data.partnerPlan.sharedDestinationAligned=bool(v.sharedDestinationAligned);
   data.partnerPlan.nextRelationshipReviewAt=v.nextRelationshipReviewAt || null;
@@ -454,7 +564,9 @@ function saveMarket(form) {
 
 function saveFinance(form) {
   const v = getForm(form);
+  if(!isDate(v.financeAsOfDate)||v.financeAsOfDate>todayISO())throw new Error('财务数字的实际日期不能晚于今天。');
   const entry = { id:uid(), type:'finance', createdAt:new Date().toISOString(),
+    financeAsOfDate:v.financeAsOfDate,certainty:v.financeCertainty,
     debtBalance:num(v.debtBalance),cashBalance:num(v.cashBalance),monthlyNetIncome:num(v.monthlyNetIncome),
     monthlyDebtPayment:num(v.monthlyDebtPayment),monthlyLivingCost:num(v.monthlyLivingCost),
     oneOffCostsNext90Days:num(v.oneOffCostsNext90Days) ?? 0, plannedCashBalance:num(v.plannedCashBalance),
@@ -462,6 +574,9 @@ function saveFinance(form) {
   data.checkIns.push(entry);
   addFact('financial','更新当前收入和负债数值；未录入数值仍为未知。');
   for (const key of ['debtBalance','cashBalance','monthlyNetIncome','monthlyDebtPayment','monthlyLivingCost','oneOffCostsNext90Days']) data.baseline[key]=entry[key];
+  data.baseline.financeAsOfDate=v.financeAsOfDate;
+  data.baseline.financeUpdatedAt=new Date().toISOString();
+  data.baseline.certainty=v.financeCertainty;
   resolvePendingFacts(v,'financial');
   persistWithDecision('每月收入和负债反馈');
   showView('home');
@@ -498,15 +613,41 @@ function saveResign(form) {
 
 function saveOffer(form) {
   const v=getForm(form),existing=data.offers.find(o=>o.id === v.id),facts=careerValues(v),score=deriveCareer(facts);
-  const offer={...existing,id:v.id || uid(),company:v.company.trim(),city:v.city,role:v.role.trim(),workMode:v.workMode,status:v.status,grossIncome:num(v.grossIncome),monthlyNetIncome:num(v.monthlyNetIncome),monthlyLivingCost:num(v.monthlyLivingCost),bonusGuaranteed:num(v.bonusGuaranteed),probationRate:num(v.probationRate),probationMonths:num(v.probationMonths),probationNetIncome:num(v.probationNetIncome),monthlyCommuteCost:num(v.monthlyCommuteCost),relocationState:v.relocationState,switchingState:v.switchingState,relocationCost:v.relocationState === 'knownAmount' ? num(v.relocationCost):null,switchingCost:v.switchingState === 'knownAmount' ? num(v.switchingCost):null,careerFacts:facts,careerScore:score.score,careerAssessment:{...score,method:'observable-facts-v1',assessedAt:new Date().toISOString()},targetAligned:facts.targetFit,growthReason:v.growthReason.trim(),certainty:v.certainty,startDate:v.startDate || null,responseDueDate:v.responseDueDate || null,canDelayStart:bool(v.canDelayStart),risks:v.risks.trim(),reversibility:v.reversibility || null,bridgeExitDate:v.bridgeExitDate || null,gdSearchRestartDate:v.gdSearchRestartDate || null};
+  const offer={...existing,id:v.id || uid(),company:v.company.trim(),city:v.city,role:v.role.trim(),workMode:v.workMode,status:v.status,grossIncome:num(v.grossIncome),monthlyNetIncome:num(v.monthlyNetIncome),monthlyLivingCost:num(v.monthlyLivingCost),bonusGuaranteed:num(v.bonusGuaranteed),probationRate:num(v.probationRate),probationMonths:num(v.probationMonths),probationNetIncome:num(v.probationNetIncome),monthlyCommuteCost:num(v.monthlyCommuteCost),relocationState:v.relocationState,switchingState:v.switchingState,relocationCost:v.relocationState === 'knownAmount' ? num(v.relocationCost):null,switchingCost:v.switchingState === 'knownAmount' ? num(v.switchingCost):null,careerFacts:facts,careerScore:score.score,careerAssessment:{...score,method:'observable-facts-v1',assessedAt:new Date().toISOString()},targetAligned:facts.targetFit,growthReason:v.growthReason.trim(),certainty:v.certainty,startDate:v.startDate || null,responseDueDate:v.responseDueDate || null,firstPayDate:v.firstPayDate || null,updatedAt:new Date().toISOString(),canDelayStart:bool(v.canDelayStart),risks:v.risks.trim(),reversibility:v.reversibility || null,bridgeExitDate:v.bridgeExitDate || null,gdSearchRestartDate:v.gdSearchRestartDate || null};
   for (const key of ['relocation','switching']) if (offer[key+'State'] === 'knownAmount' && offer[key+'Cost'] == null) throw new Error('选择金额已知后，请填写对应金额；明确没有成本填 0。');
-  const critical=['status','company','city','role','workMode','grossIncome','bonusGuaranteed','monthlyNetIncome','monthlyLivingCost','startDate','probationRate','probationMonths','probationNetIncome','relocationCost','switchingCost'];
+  const critical=['status','company','city','role','workMode','grossIncome','bonusGuaranteed','monthlyNetIncome','monthlyLivingCost','startDate','firstPayDate','probationRate','probationMonths','probationNetIncome','relocationCost','switchingCost'];
   if (existing && critical.some(k=>existing[k] !== offer[k])) {offer.termsConfirmed=false;offer.pendingConditionsClear=false;}
   if (existing) Object.assign(existing,offer);else data.offers.push(offer);
   addFact('offer',(existing ? '机会条件更新：':'新增机会：')+offer.company+' / '+offer.role+' / '+offer.city,offer.certainty);
   resolvePendingFacts(v,'offer');
   editingOfferId=null;persistWithDecision(existing ? '修改岗位信息（关键条件需重新确认）':'新增岗位');
   showView('offers');
+}
+
+
+function saveCashflowSettings(form) {
+  const v=getForm(form);
+  data.cashflowSettings={
+    salaryPayDay:num(v.salaryPayDay),
+    incomePauseStart:v.incomePauseStart || null,
+    incomePauseEnd:v.incomePauseEnd || null,
+  };
+  validateData(data); // Catch invalid gaps before any write.
+  persistWithDecision('资金模型设置','工资到账日和收入空档已更新。');
+  showView('cashflow');
+}
+function saveCashEvent(form) {
+  const v=getForm(form);
+  const existing=data.cashEvents.find(e=>e.id===v.id);
+  const event={...existing,id:existing?.id ?? uid(),kind:v.kind,label:v.label.trim(),date:v.date,
+    endDate:v.endDate||null,direction:v.direction,impact:v.impact,
+    amount:v.direction==='milestone' ? null : num(v.amount),recurrenceMonths:Number(v.recurrenceMonths??0),
+    certainty:v.certainty,note:v.note.trim(),completedAt:existing?.completedAt??null};
+  if(existing)Object.assign(existing,event);else data.cashEvents.push(event);
+  validateData(data);
+  editingCashEventId=null;
+  persistWithDecision(existing?'调整资金事件':'新增资金事件','资金事件已保存，预测已重新计算。');
+  showView('cashflow');
 }
 
 function saveSettings(form) {
@@ -578,7 +719,8 @@ document.addEventListener('submit',async event=>{
   if (!(form instanceof HTMLFormElement)) return;
   event.preventDefault();
   const handlers={ 'light-form':saveLight,'major-form':saveMajor,'backup-form':saveBackup,'baseline-form':saveBaseline,'market-form':saveMarket,'finance-form':saveFinance,
-    'relationship-form':saveRelationship,'resign-form':saveResign,'offer-form':saveOffer,'settings-form':saveSettings };
+    'relationship-form':saveRelationship,'resign-form':saveResign,'offer-form':saveOffer,'settings-form':saveSettings,
+    'cash-event-form':saveCashEvent,'cashflow-settings-form':saveCashflowSettings };
   const before=structuredClone(data);
   try { await handlers[form.getAttribute('id')]?.(form); } catch (error) { data=before; const target=form.querySelector('.form-error'); if (target) target.textContent=error.message; else notice(error.message); }
 });
@@ -592,6 +734,26 @@ document.addEventListener('click',event=>{
   if (!action) return;
   const before=structuredClone(data);
   try {
+    if (['edit-cash-event','delete-cash-event','finish-cash-event','cancel-cash-edit'].includes(action)) {
+      if(action==='cancel-cash-edit'){editingCashEventId=null;render();return;}
+      const item=data.cashEvents.find(e=>e.id===target.dataset.id);
+      if(!item)throw new Error('没有找到这笔资金事项。');
+      if(action==='edit-cash-event'){editingCashEventId=item.id;render();return;}
+      if(action==='delete-cash-event'){
+        if(!confirm('删除这条资金事项及其后续重复记录？此操作不能撤销。'))return;
+        data.cashEvents=data.cashEvents.filter(e=>e.id!==item.id);
+        editingCashEventId=null;
+        persistWithDecision('删除资金事件','资金事件已删除，预测已重新计算。');
+        return;
+      }
+      if(action==='finish-cash-event'){
+        if(item.recurrenceMonths)throw new Error('周期事件不能整体标记支付；请修改下次日期或保留重复计划。');
+        if(!confirm('确认已经发生？完成后请同步更新现金余额，避免资金预测沿用支付前的余额。'))return;
+        item.completedAt=todayISO();
+        persistWithDecision('确认资金事项完成','已记录事项完成；请同步更新可用现金。');
+        return;
+      }
+    }
     if (action === 'complete-checkpoint' || action === 'reopen-checkpoint') {
       const id = target.dataset.id;
       if (!CHECKPOINTS.some(item => item.id === id)) throw new Error('未知计划节点。');
@@ -640,6 +802,22 @@ document.addEventListener('click',event=>{
 });
 
 document.addEventListener('change',async event=>{
+  if(event.target.name==='kind' && event.target.closest('#cash-event-form')){
+    const v=event.target.value,form=event.target.closest('form');
+    const defaults={insurance:['out','extra','0'],rent:['out','living','3'],bonus:['in','extra','0'],
+      offer:['milestone','milestone','0'],first_pay:['milestone','milestone','0'],moving:['out','extra','0'],other:['out','extra','0']};
+    const [direction,impact,repeat]=defaults[v]??defaults.other;
+    form.querySelector('[name="direction"]').value=direction;
+    form.querySelector('[name="impact"]').value=impact;
+    form.querySelector('[name="recurrenceMonths"]').value=repeat;
+    return;
+  }
+  if(event.target.name==='direction' && event.target.closest('#cash-event-form')){
+    const form=event.target.closest('form'),milestone=event.target.value==='milestone';
+    if(milestone)form.querySelector('[name="impact"]').value='milestone';
+    else if(form.querySelector('[name="impact"]').value==='milestone')form.querySelector('[name="impact"]').value='extra';
+    return;
+  }
   if (event.target.name === 'update-topic') { feedbackTab=event.target.value;editingOfferId=null;render();return; }
   if (event.target.name === 'city') { const plan=event.target.closest('form').querySelector('[data-shanghai-plan]');if(plan) plan.hidden=event.target.value !== '上海';return; }
   if (event.target.name === 'manualOverride') { event.target.closest('form').querySelector('[data-exception]').hidden=event.target.value !== 'true';return; }

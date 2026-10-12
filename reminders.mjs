@@ -1,4 +1,5 @@
 import { CHECKPOINTS, isDate, checkpointCompletion } from "./data.mjs";
+import { expandCashEvents } from "./cashflow.mjs";
 
 const escapeText = value => String(value).replace(/\\/g, "\\\\").replace(/\r?\n/g, "\\n").replace(/;/g, "\\;").replace(/,/g, "\\,");
 
@@ -39,6 +40,14 @@ export function makeCalendar(data) {
     // Completed milestones should not be added to a newly exported calendar.
     if (checkpointCompletion(data, item.id)) continue;
     lines.push(...event(item.id, overrides[item.id] ?? item.date, `${item.type === 'major' ? '重新考虑去向' : '记录近况'}：${item.label}`, stamp));
+  }
+  // These calendar entries remain generic: do not embed personal money amounts,
+  // employer names, debts, relationship details or user notes in calendar exports.
+  const today = new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+  for(const [index,entry] of expandCashEvents(data,today,365).entries()){
+    const type = entry.direction==='milestone' ? '职业 / 首薪日期确认' : '资金收支核对';
+    lines.push(...event('cash-'+index+'-'+entry.date,entry.date,type,stamp,
+      '回到资金计划核对金额、日期和是否已实际付款；尚未确认的收入不能视为已经到账。'));
   }
   const route = data?.routeDecision ?? {};
   if (route.gdSearchRestartDate) lines.push(...event("gd-search-restart", route.gdSearchRestartDate, "重新投广东岗位", stamp));

@@ -1,4 +1,5 @@
 import { CHECKPOINTS, isDate, checkpointCompletion } from './data.mjs';
+import { projectCashflow } from './cashflow.mjs';
 const DAY = 86400000;
 const ACTIVE = new Set(['NOTICE_AND_HANDOVER','SHANGHAI_BRIDGE_ACTIVE','GUANGDONG_MIGRATION','GUANGDONG_SETTLING','STABLE']);
 const SEARCH = new Set(['MARKET_TESTING','HOLD_AND_SEARCH','SHANGHAI_BRIDGE_ACTIVE']);
@@ -174,6 +175,15 @@ function warningsFor(data,today) {
   if (isDate(p.reunionDate) && isDate(p.longDistanceStartDate) && nonnegative(data.config?.maxLongDistanceDays) && days(p.longDistanceStartDate,p.reunionDate) > data.config.maxLongDistanceDays) w.push({code:'R06',level:'yellow',text:'异地计划超过双方认可边界，需要共同复查。'});
   if (f.available !== null && f.monthlyBalance !== null && f.available+Math.min(0,f.monthlyBalance)*2 < 0) w.push({code:'F01',level:'red',text:'按现在的收入和开支，现金撑不了未来两个月，请尽快安排还贷和生活费。'});
   else if (['UNAFFORDABLE','TIGHT'].includes(f.stress)) w.push({code:'F04',level:'yellow',text:'如果一个月没工资：'+(f.stress === 'TIGHT' ? '紧张。':'无法覆盖必要支出。')});
+  const cash=projectCashflow(data,today);
+  if(cash.available && cash.firstDeficit){
+    const within=days(today,cash.firstDeficit);
+    const current=cash.snapshot.status==='fresh';
+    w.push({code:'CF01',level:current && within<=30 ? 'yellow':'info',
+      text:(current?'按已录入现金与资金事件':'按旧的或尚未核实的财务数据')+
+        '估算，未来'+(within<=30?'30':within<=60?'60':'90')+
+        '天可能出现现金缺口（最早'+cash.firstDeficit+'）。请核对工资实际到账日、每笔扣款日及可用现金；这不是银行确定的逾期日期。'});
+  }
   const last = lastSearchDate(data), cycle = data.config?.driftNoActionDays ?? 14;
   const searching = SEARCH.has(state) && (state !== 'SHANGHAI_BRIDGE_ACTIVE' || (isDate(r.gdSearchRestartDate) && today >= r.gdSearchRestartDate));
   if (searching && isDate(last) && days(last,today) >= cycle) {

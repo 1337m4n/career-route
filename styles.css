@@ -220,12 +220,55 @@ summary { cursor: pointer; color: var(--teal-dark); }
 .toast.show { opacity: 1; transform: translateY(0); }
 .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 
+
+/* Cashflow planning is purposefully neutral: a forecast is never a bank guarantee. */
+.cash-preview { display: flex; gap: 24px; justify-content: space-between; align-items: center; border-top: 1px solid var(--line); padding: 18px 0; }
+.cash-preview > div { max-width: 65%; }
+.cash-preview strong { display: block; font-size: 17px; color: var(--ink); }
+.cash-preview p { margin: 9px 0 0; font-size: 13px; line-height: 1.6; color: var(--muted); }
+.cash-preview .btn { white-space: normal; text-align: center; }
+.cash-muted { color: var(--muted); font-size: 14px; line-height: 1.7; }
+.forecast-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 16px; margin: 22px 0; }
+.forecast-card { background: #f9fbfb; border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; }
+.forecast-card.shortfall { border-color: #eac9cd; background: #fffbfb; }
+.forecast-card h3 { font-size: 14px; color: var(--muted); margin: 0 0 11px; font-weight: 650; }
+.forecast-card > strong { display: block; color: var(--ink); font-size: 25px; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+.forecast-card.shortfall > strong { color: var(--red); }
+.forecast-card > p { font-size: 12px; color: var(--muted); margin: 4px 0 16px; }
+.forecast-card dl { margin: 0; border-top: 1px solid var(--line); }
+.forecast-card dl > div { display: flex; justify-content: space-between; gap: 9px; padding: 8px 0; font-size: 12px; border-bottom: 1px solid var(--line-soft); }
+.forecast-card dt { color: var(--muted); }
+.forecast-card dd { margin: 0; font-weight: 650; text-align: right; font-variant-numeric: tabular-nums; }
+.cash-issues { margin: 16px 0; border-left: 3px solid var(--amber); background: var(--amber-wash); padding: 13px 19px; font-size: 13px; }
+.cash-issues summary { cursor: pointer; font-weight: 650; }
+.cash-issues ul { margin: 12px 0 0; }
+.cash-table { margin-bottom: 16px; }
+.cash-table td { font-size: 13px; }
+.cash-table td small { display: block; font-size: 12px; color: var(--muted); margin-top: 4px; }
+.cash-date-list { list-style: none; margin: 5px 0 16px; padding: 0; border-top: 1px solid var(--line); }
+.cash-date-list li { display: flex; flex-wrap: wrap; gap: 12px; padding: 10px 2px; border-bottom: 1px solid var(--line-soft); font-size: 13px; }
+.cash-date-list time { min-width: 75px; color: var(--teal-dark); font-weight: 650; }
+.cash-manage-list { list-style: none; margin: 15px 0 22px; padding: 0; }
+.cash-manage-list li { padding: 9px 0; border-bottom: 1px solid var(--line-soft); display: flex; gap: 14px; align-items: center; justify-content: space-between; font-size: 13px; }
+.cash-manage-list li > span:last-child { display: flex; flex-wrap: wrap; gap: 10px; }
+.evidence-details { border-top: 1px solid var(--line); padding: 12px 0 0; margin: 8px 0; }
+.evidence-details summary { font-size: 13px; font-weight: 650; color: var(--teal-dark); cursor: pointer; }
+.evidence-groups { padding: 12px 0 2px; }
+.evidence-groups p { font-size: 13px !important; color: var(--muted); margin-bottom: 9px; }
+.evidence-groups strong { color: var(--ink); display: inline-block; min-width: 82px; }
+
 @media (max-width: 1100px) {
   .app-shell { grid-template-columns: 214px minmax(0, 1fr); }
   .sidebar { padding-left: 12px; padding-right: 12px; }
   .main { padding: 38px 34px 70px; }
   .hero-grid { gap: 28px; }
   .hero-grid > * + * { padding-left: 28px; }
+}
+@media (max-width: 850px) {
+  .forecast-grid { grid-template-columns: 1fr; }
+  .cash-preview { flex-direction: column; align-items: flex-start; }
+  .cash-preview > div { max-width: none; }
+  .cash-manage-list li { flex-direction: column; align-items: flex-start; }
 }
 @media (max-width: 760px) {
   .app-shell { display: block; }

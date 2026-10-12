@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { decodeBackup } from '../crypto.mjs';
 
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
-const allowed = new Set(['index.html','styles.css','app.js','data.mjs','rules.mjs','crypto.mjs','reminders.mjs','favicon.svg']);
+const allowed = new Set(['index.html','styles.css','app.js','data.mjs','rules.mjs','crypto.mjs','reminders.mjs','cashflow.mjs','favicon.svg']);
 const prefix=process.env.CAREER_ROUTE_PREFIX || '';
 const server = createServer(async (req,res)=> {
   if (prefix && req.url===prefix) {res.writeHead(301,{Location:prefix+'/'});res.end();return;}
@@ -34,7 +34,7 @@ try {
   const select=async (form,name,value)=>page.locator('#'+form+' [name="'+name+'"]').selectOption(value);
   const submit=async form=>page.locator('#'+form+' button[type="submit"]').click();
   const stored=()=>page.evaluate(()=>JSON.parse(localStorage.getItem('career-route:v1')));
-  const today=new Date().toISOString().slice(0,10),future=n=>new Date(Date.parse(today)+n*86400000).toISOString().slice(0,10);
+  const today=new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()),future=n=>new Date(Date.parse(today)+n*86400000).toISOString().slice(0,10);
   await page.goto(url);
   await page.getByRole('heading',{name:'今天的判断'}).waitFor();
   assert.equal(await page.title(),'今日判断 · 工作与搬家计划');
@@ -50,6 +50,42 @@ try {
   for (const key of ['technologyDepth','responsibility','transferability','targetFit','outcomes']) await select('baseline-form','career_'+key,'true');
   await submit('baseline-form');await page.getByRole('heading',{name:'今天的判断'}).waitFor();
   assert.equal((await stored()).schemaVersion,2);
+  assert.equal((await stored()).baseline.financeAsOfDate,today);
+  await navigate('cashflow');await page.getByRole('heading',{name:'资金计划'}).waitFor();
+  assert.equal(await page.locator('.forecast-card').count(),3);
+  assert.match(await page.locator('.cash-issues').innerText(),/资金事件/);
+  await select('cashflow-settings-form','salaryPayDay','8');
+  await submit('cashflow-settings-form');
+  assert.equal((await stored()).cashflowSettings.salaryPayDay,8);
+  await navigate('cashflow');
+  await select('cash-event-form','kind','insurance');
+  await fill('cash-event-form','label','合成测试保险');
+  await fill('cash-event-form','date',future(5));
+  await fill('cash-event-form','amount','4300');
+  await select('cash-event-form','certainty','confirmed');
+  await submit('cash-event-form');
+  assert.equal((await stored()).cashEvents.length,1);
+  assert.equal((await stored()).cashEvents[0].amount,4300);
+  await navigate('cashflow');
+  await select('cash-event-form','kind','bonus');
+  await fill('cash-event-form','label','尚未确认的奖金');
+  await fill('cash-event-form','date',future(40));
+  await fill('cash-event-form','amount','8000');
+  await select('cash-event-form','certainty','likely');
+  await submit('cash-event-form');
+  assert.equal((await stored()).cashEvents.length,2);
+  assert.equal((await stored()).cashEvents[1].direction,'in');
+  await navigate('cashflow');
+  assert.match(await page.locator('.cash-table').innerText(),/尚未确认的奖金/);
+  const bonusId=(await stored()).cashEvents[1].id;
+  await page.locator('[data-action="edit-cash-event"][data-id="'+bonusId+'"]').first().click();
+  await fill('cash-event-form','amount','9000');
+  await submit('cash-event-form');
+  assert.equal((await stored()).cashEvents[1].amount,9000);
+  await navigate('timeline');
+  assert.match(await page.locator('#app').innerText(),/合成测试保险/);
+  await navigate('home');
+  assert.match(await questions.nth(4).innerText(),/已确认、估算与待确认/);
   // Saving baseline marks its milestone complete using the recorded day, not the due day.
   assert.match(await page.locator('.timeline-node.is-complete').innerText(),/已完成/);
   await navigate('timeline');
