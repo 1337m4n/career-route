@@ -215,6 +215,78 @@ function renderTimelineRail() {
     </div>`;
   }).join('')}</div>`;
 }
+
+function financeFreshnessText() {
+  const snapshot=financeSnapshot(data,todayISO());
+  const labels={fresh:'近期已更新',aging:'超过7天未核对',stale:'超过30天未核对',unknown:'尚无更新日期',future:'数据日期需核查'};
+  return `${snapshot.date ? dateLabel(snapshot.date):'日期未知'} · ${labels[snapshot.status]}${snapshot.age!=null&&snapshot.age>=0 ? '（'+snapshot.age+'天前）':''} · ${CASH_CERTAINTIES[snapshot.certainty]||'确定程度未知'}`;
+}
+function renderCashflowPreview() {
+  const projection=projectCashflow(data,todayISO());
+  if(!projection.available)return section('未来资金情况',
+    `<p class="cash-muted">30/60/90天预测资料不完整：${escapeHTML(projection.missing.join('、'))}。未知金额不会自动按0元计算。</p><button class="text-link" type="button" data-view="cashflow">补齐资金计划</button>`);
+  const first=projection.periods[0];
+  const risk=first.firstDeficit ? `按谨慎口径，预计${dateLabel(first.firstDeficit)}前后可能出现缺口` : '未来30天未发现模型内的现金负数';
+  return section('未来资金情况',`<div class="cash-preview"><div><strong>${escapeHTML(risk)}</strong><p>30天谨慎最低余额：${money(first.cautiousLowest)}。这是按已录入数据估算，不是银行还款日承诺。</p></div><button class="btn btn-secondary" type="button" data-view="cashflow">查看30/60/90天预测和事件</button></div>
+  <p class="note">财务数据：${escapeHTML(financeFreshnessText())}。<span class="muted">尚未确认的奖金不计入谨慎余额。</span></p>`);
+}
+function renderCashflow() {
+  const today=todayISO(), b=data.baseline, projection=projectCashflow(data,today), cfg=data.cashflowSettings ?? {};
+  const cards=projection.available ? `<div class="forecast-grid">${projection.periods.map(p=>`<article class="forecast-card ${p.status==='shortfall' ? 'shortfall':''}">
+    <h3>未来${p.days}天</h3>
+    <strong>${money(p.cautiousEnd)}</strong>
+    <p>谨慎期末余额</p>
+    <dl><div><dt>期间最低</dt><dd>${money(p.cautiousLowest)}</dd></div>
+      <div><dt>最多需补现金</dt><dd>${money(p.gap)}</dd></div>
+      <div><dt>首次缺口</dt><dd>${p.firstDeficit ? escapeHTML(shortDate(p.firstDeficit)):'未发现'}</dd></div>
+      <div><dt>计入估计收入后</dt><dd>${money(p.scenarioEnd)}</dd></div></dl>
+  </article>`).join('')}</div>`:
+    `<div class="inline-alert">目前缺少${escapeHTML(projection.missing.join('、'))}，不能生成金额预测。先在“更新近况”补充缺失数字。</div>`;
+  const warn=projection.issues.length ? `<details class="cash-issues" open><summary>本次预测需要留意的 ${projection.issues.length} 项</summary><ul class="plain-list">${projection.issues.map(x=>`<li>${escapeHTML(x)}</li>`).join('')}</ul></details>` : '';
+  const eventRows=projection.events.map(e=>`<tr><td><strong>${escapeHTML(e.label)}</strong><small>${escapeHTML(CASH_EVENT_TYPES[e.kind]||'其他')} ${e.virtual?'· 来自岗位记录':''}</small></td>
+    <td>${escapeHTML(dateLabel(e.date))}</td>
+    <td class="num">${e.direction==='milestone'?'只提醒':(e.direction==='in'?'+':'−')+money(e.amount)}</td>
+    <td>${escapeHTML(CASH_CERTAINTIES[e.certainty]||'未知')}<small>${escapeHTML(CASH_IMPACTS[e.impact]||'只提醒')}</small></td>
+    <td>${e.virtual?'在“岗位比较”中修改':`<button class="text-link" type="button" data-action="edit-cash-event" data-id="${escapeHTML(e.originId)}">编辑</button>`}</td></tr>`).join('');
+  const savedEvents=(data.cashEvents ?? []).map(e=>`<li><span>${escapeHTML(e.label)} · ${escapeHTML(dateLabel(e.date))}${e.recurrenceMonths ? ' · 每'+e.recurrenceMonths+'个月':''}${e.completedAt?' · 已完成':''}</span>
+      <span><button class="text-link" type="button" data-action="edit-cash-event" data-id="${escapeHTML(e.id)}">修改</button>
+      ${!e.recurrenceMonths&&!e.completedAt ? `<button class="text-link" type="button" data-action="finish-cash-event" data-id="${escapeHTML(e.id)}">已支付 / 完成</button>`:''}
+      <button class="text-link error-note" type="button" data-action="delete-cash-event" data-id="${escapeHTML(e.id)}">删除</button></span></li>`).join('');
+  const e=(data.cashEvents ?? []).find(x=>x.id===editingCashEventId)||{};
+  const eventForm=`<form id="cash-event-form"><input type="hidden" name="id" value="${escapeHTML(e.id||'')}"/>
+    ${formSection(editingCashEventId?'修改资金事件':'新增一笔资金事件',
+      select('kind','事件类型',e.kind??'insurance',Object.entries(CASH_EVENT_TYPES),{required:true})+
+      input('label','事项名称',e.label,{required:true,placeholder:'例如季度房租、续保、奖金'})+
+      input('date','预计发生日期',e.date,{type:'date',required:true})+
+      select('direction','对现金的影响',e.direction??'out',[['out','支出'],['in','收入'],['milestone','只提醒，不计算金额']],{required:true})+
+      input('amount','金额（未知可留空）',e.amount,{type:'number',min:0,step:'.01',help:'金额尚不确定可留空，系统会提示预测不完整。'})+
+      certaintySelect('certainty','金额或日期有多确定？',e.certainty??'rough')+
+      select('impact','如何计入预算',e.impact??'extra',Object.entries(CASH_IMPACTS),{required:true,help:'如果房租已经算在基本生活费里，选择“包含在日常生活预算中”，并填写真实重复周期。'})+
+      select('recurrenceMonths','多久发生一次',String(e.recurrenceMonths??0),[['0','仅一次'],['1','每月'],['3','每3个月'],['6','每6个月'],['12','每12个月']],{required:true})+
+      input('endDate','重复到哪一天（可空）',e.endDate,{type:'date'})+
+      textarea('note','备注、资金来源或待确认事项',e.note,{placeholder:'例如奖金预计在房租前发放，但税后金额仍需确认。'}))}
+    ${formActions(editingCashEventId?'保存资金事件修改':'保存资金事件')}
+    ${editingCashEventId?'<button class="text-link" type="button" data-action="cancel-cash-edit">取消修改</button>':''}
+  </form>`;
+  const settings=`<form id="cashflow-settings-form">${formSection('现金流计算方式',
+    select('salaryPayDay','现有工作的每月发薪日',cfg.salaryPayDay??'',
+      Array.from({length:31},(_,i)=>[String(i+1),'每月'+(i+1)+'日']),{help:'未知可空；未知时工资按日均摊，无法反映发薪日前的真实紧张程度。'})+
+    input('incomePauseStart','预计开始没有工资的日期（可空）',cfg.incomePauseStart,{type:'date'})+
+    input('incomePauseEnd','预计恢复正常工资的日期（可空）',cfg.incomePauseEnd,{type:'date',help:'仅在收入空档已能合理估计时填写；新工资数额变了仍需更新月到手。'}))}
+    ${formActions('保存计算设置')}</form>`;
+  return pageHeader('资金计划','用已知事实管理未来30、60、90天')+
+    section('资金安全边界',`<p class="section-lead">现金余额来自你最后一次保存的记录：${money(b.cashBalance)}。<strong>${escapeHTML(financeFreshnessText())}</strong>。</p>
+      ${cards}${warn}<p class="note">模型默认工资持续、月供和生活费按日均摊。还款日逐笔分散时，真实余额可能比预测更早不足；不能据此承诺一定不会逾期。已出账 / 已支付金额应及时更新可用现金。</p>
+      <button class="text-link" type="button" data-view="feedback" data-tab="finance">更新现金、工资和月供</button>`)+
+    section('即将发生的资金事件',`<p class="section-lead">车险、季度房租、奖金、搬迁和入职首薪可逐项记账。Offer和首薪日期默认只作提醒，不自动当作已经到账的收入。</p>
+      ${eventRows ? `<div class="offer-table-wrap"><table class="offer-table cash-table"><thead><tr><th>事项</th><th>日期</th><th>金额</th><th>依据</th><th>修改</th></tr></thead><tbody>${eventRows}</tbody></table></div>` : '<p class="empty">未来90天还没有已录入的资金事件。</p>'}
+      ${savedEvents ? `<details><summary>管理手动记录的事项（包含90天以外）</summary><ul class="cash-manage-list">${savedEvents}</ul></details>`:''}
+      ${eventForm}`)+
+    section('工资与收入空档',settings)+
+    section('计算依据',`<ol class="plain-list">${(projection.assumptions??[]).map(a=>`<li>${escapeHTML(a)}</li>`).join('')}</ol>
+      <p class="note">“谨慎余额”排除未确认的额外收入；“计入估计收入后”只是情景推演，不代表奖金或新工资已经到账。</p>`);
+}
+
 function renderFinanceSummary() {
   const b=data.baseline, f=financialCapacity(data);
   return `<dl class="metric-list"><div><dt>月到手</dt><dd>${money(b.monthlyNetIncome)}</dd></div><div><dt>月供 + 基本生活</dt><dd>${money(f.required)}</dd></div><div><dt>每月剩余</dt><dd class="${f.monthlyBalance < 0 ? 'negative':''}">${money(f.monthlyBalance)}</dd></div><div><dt>如果一个月没工资</dt><dd>${{UNKNOWN:'信息不足',COVERED:'可覆盖',TIGHT:'紧张',UNAFFORDABLE:'无法覆盖'}[f.stress]}</dd></div></dl><p class="note">扣除已知大额支出后检查必要开支承受能力，这只能帮助你看备用现金够不够，提离职前还要确认岗位和交接条件。</p>`;
