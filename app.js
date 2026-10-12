@@ -3,11 +3,12 @@ import { downloadCalendar } from './reminders.mjs';
 import { evaluate, validateBaseline, qualifyGuangdongOffer, qualifyShanghaiOffer, routeTendencies, deriveCareer, deriveEnergy, CAREER_WEIGHTS, financialCapacity, resignBlockers, addMonths, bridgeRenewalErrors } from './rules.mjs';
 
 import { encryptBackup, decodeBackup } from './crypto.mjs';
+import { projectCashflow, financeSnapshot, expandCashEvents, CASH_EVENT_TYPES, CASH_CERTAINTIES, CASH_IMPACTS } from './cashflow.mjs';
 
 const app = document.querySelector('#app');
 const toast = document.querySelector('#toast');
 const insecureOrigin = !window.isSecureContext;
-const VIEWS = new Set(['home', 'feedback', 'offers', 'timeline', 'history', 'settings']);
+const VIEWS = new Set(['home', 'cashflow', 'feedback', 'offers', 'timeline', 'history', 'settings']);
 const FEEDBACK_TABS = ['baseline', 'market', 'finance', 'offer', 'relationship', 'major', 'resign', 'progress', 'light'];
 const STATE_LABELS = {
   BASELINE_SETUP: '先填收入和负债', MARKET_TESTING: '在广东和上海投简历', HOLD_AND_SEARCH: '继续上班，同时投简历',
@@ -22,6 +23,7 @@ let dataError = null;
 let currentView = 'home';
 let feedbackTab = '';
 let editingOfferId = null;
+let editingCashEventId = null;
 let toastTimer;
 
 try { if (insecureOrigin) throw new Error('个人数据只能在 HTTPS 或本机安全预览中使用。'); data = loadData(); } catch (error) { dataError = error; data = createInitialData(); }
@@ -427,9 +429,9 @@ function render() {
     if (active) button.setAttribute('aria-current','page'); else button.removeAttribute('aria-current');
   });
   if (dataError) { renderRecovery(); return; }
-  const pages = { home: renderHome, feedback: renderFeedback, offers: renderOffers, timeline: renderTimeline, history: renderHistory, settings: renderSettings };
+  const pages = { home: renderHome, cashflow: renderCashflow, feedback: renderFeedback, offers: renderOffers, timeline: renderTimeline, history: renderHistory, settings: renderSettings };
   app.innerHTML = pages[currentView]();
-  document.title = `${{home:'今日判断',feedback:'更新近况',offers:'岗位比较',timeline:'重要日期',history:'我的记录',settings:'设置与数据'}[currentView]} · 工作与搬家计划`;
+  document.title = `${{home:'今日判断',cashflow:'资金计划',feedback:'更新近况',offers:'岗位比较',timeline:'重要日期',history:'我的记录',settings:'设置与数据'}[currentView]} · 工作与搬家计划`;
 }
 
 function getForm(form) { return Object.fromEntries(new FormData(form)); }
