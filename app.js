@@ -260,11 +260,11 @@ function renderCashflow() {
   </article>`).join('')}</div>`:
     `<div class="inline-alert">目前缺少${escapeHTML(projection.missing.join('、'))}，不能生成金额预测。先在“更新近况”补充缺失数字。</div>`;
   const warn=projection.issues.length ? `<details class="cash-issues" open><summary>本次预测需要留意的 ${projection.issues.length} 项</summary><ul class="plain-list">${projection.issues.map(x=>`<li>${escapeHTML(x)}</li>`).join('')}</ul></details>` : '';
-  const eventRows=projection.events.map(e=>`<tr><td><strong>${escapeHTML(e.label)}</strong><small>${escapeHTML(CASH_EVENT_TYPES[e.kind]||'其他')} ${e.virtual?'· 来自岗位记录':''}</small></td>
+  const eventRows=projection.events.map(e=>`<tr><td><strong>${escapeHTML(e.label)}</strong><small>${escapeHTML(CASH_EVENT_TYPES[e.kind]||'其他')} ${e.virtual ? e.origin==='baseline'?'· 来自基本资料':'· 来自岗位记录':''}</small></td>
     <td>${escapeHTML(dateLabel(e.date))}</td>
     <td class="num">${e.direction==='milestone'?'只提醒':(e.direction==='in'?'+':'−')+money(e.amount)}</td>
     <td>${escapeHTML(CASH_CERTAINTIES[e.certainty]||'未知')}<small>${escapeHTML(CASH_IMPACTS[e.impact]||'只提醒')}</small></td>
-    <td>${e.virtual?'在“岗位比较”中修改':`<button class="text-link" type="button" data-action="edit-cash-event" data-id="${escapeHTML(e.originId)}">编辑</button>`}</td></tr>`).join('');
+    <td>${e.virtual ? (e.origin==='baseline'?'到“更新近况”修改':'到“岗位比较”修改') : `<button class="text-link" type="button" data-action="edit-cash-event" data-id="${escapeHTML(e.originId)}">编辑</button>`}</td></tr>`).join('');
   const savedEvents=(data.cashEvents ?? []).map(e=>`<li><span>${escapeHTML(e.label)} · ${escapeHTML(dateLabel(e.date))}${e.recurrenceMonths ? ' · 每'+e.recurrenceMonths+'个月':''}${e.completedAt?' · 已完成':''}</span>
       <span><button class="text-link" type="button" data-action="edit-cash-event" data-id="${escapeHTML(e.id)}">修改</button>
       ${!e.recurrenceMonths&&!e.completedAt ? `<button class="text-link" type="button" data-action="finish-cash-event" data-id="${escapeHTML(e.id)}">已支付 / 完成</button>`:''}
