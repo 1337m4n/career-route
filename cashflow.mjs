@@ -66,6 +66,17 @@ export function expandCashEvents(data,today,horizon=90) {
       rows.push({...e,date,originId:e.id});
     }
   }
+  // Legacy bonus fields are a planning scenario, never guaranteed cash.
+  // A manually entered bonus supersedes this baseline estimate to avoid counting twice.
+  const bonusDate=data?.baseline?.bonusPayDate;
+  const bonusAmount=data?.baseline?.bonusAmount;
+  if(validMoney(bonusAmount) && bonusAmount>0 &&
+     inRange(bonusDate,isoPlus(today,1),isoPlus(today,horizon)) &&
+     !(data?.cashEvents ?? []).some(e=>e.kind==='bonus' && !e.completedAt)){
+    rows.push({id:'baseline-bonus',originId:'baseline-bonus',label:'预计奖金（来自基本资料）',
+      date:bonusDate,kind:'bonus',direction:'in',impact:'extra',certainty:'likely',
+      amount:bonusAmount,virtual:true,origin:'baseline'});
+  }
   // Dates in an Offer are informational until the user has actually confirmed
   // new wage receipts. Never turn a verbal or written offer into cash automatically.
   for(const o of data?.offers ?? []){
