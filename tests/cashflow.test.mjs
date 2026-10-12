@@ -117,3 +117,17 @@ test('30天资金缺口提醒能进入第五问判断，但明确是预测而非
   d.baseline.financeAsOfDate='2026-08-01';
   assert.equal(evaluate(d,'2026-10-12').warnings.find(x=>x.code==='CF01').level,'info');
 });
+
+test('基本资料中的预计奖金只进入情景收入，手动奖金避免重复计入',()=>{
+  const d=fixture();
+  d.baseline.bonusAmount=7500;
+  d.baseline.bonusPayDate='2026-11-10';
+  const first=projectCashflow(d,'2026-10-12');
+  assert.equal(first.events.filter(e=>e.kind==='bonus').length,1);
+  assert.equal(Math.round(first.periods[1].scenarioEnd-first.periods[1].cautiousEnd),7500);
+  d.cashEvents.push(event('manualBonus','2026-11-15',7400,
+    {kind:'bonus',direction:'in',certainty:'likely'}));
+  const second=projectCashflow(d,'2026-10-12');
+  assert.equal(second.events.filter(e=>e.kind==='bonus').length,1);
+  assert.equal(Math.round(second.periods[1].scenarioEnd-second.periods[1].cautiousEnd),7400);
+});
