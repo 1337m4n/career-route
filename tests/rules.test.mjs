@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { evaluate,qualifyGuangdongOffer,qualifyShanghaiOffer,routeTendencies,deriveCareer,deriveEnergy,resignBlockers,financialCapacity,bridgeRenewalErrors } from '../rules.mjs';
-import { createInitialData,validateData,recordRouteDecision } from '../data.mjs';
+import { createInitialData,validateData,recordRouteDecision,checkpointCompletion } from '../data.mjs';
 import { encryptBackup,decodeBackup } from '../crypto.mjs';
 import { makeCalendar } from '../reminders.mjs';
 
@@ -205,4 +205,32 @@ test('临时例外与轻检查的提前复查日期进入下一节点和日历',
 });
 test('evaluate 为纯函数，不修改原数据',()=>{
   const d=fixture(),before=structuredClone(d);evaluate(d,'2026-12-01');assert.deepEqual(d,before);
+});
+
+test('时间节点只凭完成记录显示对勾，自动找回早期基本资料实际日期',()=>{
+  const d=fixture();
+  assert.equal(checkpointCompletion(d,'baseline'),null);
+  d.decisionHistory.push({source:'基本资料',at:'2026-10-09T06:00:00.000Z'});
+  assert.equal(checkpointCompletion(d,'baseline'),'2026-10-09');
+  assert.equal(checkpointCompletion(d,'market_midpoint'),null);
+  assert.ok(!makeCalendar(d).includes('career-route-baseline@'));
+  d.config.checkpointCompletions.baseline=null; // Manual undo must not resurrect historical completion.
+  assert.equal(checkpointCompletion(d,'baseline'),null);
+  assert.ok(makeCalendar(d).includes('career-route-baseline@'));
+  d.config.checkpointCompletions.baseline='2026-10-09';
+  d.config.checkpointCompletions.market_midpoint='2026-10-12'; // Finished before due date.
+  const restored=validateData(d);
+  assert.equal(checkpointCompletion(restored,'market_midpoint'),'2026-10-12');
+  assert.ok(!makeCalendar(restored).includes('career-route-market_midpoint@'));
+  restored.config.checkpointCompletions.market_midpoint=null;
+  assert.equal(checkpointCompletion(restored,'market_midpoint'),null);
+  assert.throws(()=>validateData({...d,config:{...d.config,checkpointCompletions:{baseline:'2026-13-40'}}}),/时间节点完成记录/);
+});
+
+test('职业精力提醒围绕换工作计划，不夹带医疗诊断术语',()=>{
+  const d=fixture();d.baseline.energyFacts={affectsLife:true};
+  const warnings=evaluate(d,'2026-10-12').warnings.filter(item=>item.code==='E01');
+  assert.equal(warnings.length,1);
+  assert.match(warnings[0].text,/岗位成长|求职进展/);
+  assert.doesNotMatch(warnings[0].text,/医疗|诊断/);
 });
